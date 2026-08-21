@@ -1,0 +1,22 @@
+{
+  "name": "trafficwar-sdks",
+  "private": true,
+  "description": "Official TrafficWar server SDKs",
+  "packageManager": "npm@11.6.1",
+  "workspaces": [
+    "packages/node",
+    "examples/node/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace @trafficwar/node",
+    "check": "npm run check --workspace @trafficwar/node",
+    "smoke": "npm run smoke --workspace @trafficwar/node",
+    "test": "npm run test --workspace @trafficwar/node",
+    "check:examples:node": "npm run check --workspace @trafficwar/example-express --workspace @trafficwar/example-elysia --workspace @trafficwar/example-nestjs",
+    "test:examples:node": "npm run test --workspace @trafficwar/example-express --workspace @trafficwar/example-elysia --workspace @trafficwar/example-nestjs",
+    "pack:node": "npm pack --workspace @trafficwar/node"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  }
+}

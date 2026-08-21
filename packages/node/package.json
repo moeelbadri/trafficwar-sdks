@@ -1,0 +1,65 @@
+{
+  "name": "@trafficwar/node",
+  "version": "1.0.0",
+  "description": "Official TrafficWar server-side SDK for Node.js",
+  "author": "TrafficWar",
+  "license": "MIT",
+  "homepage": "https://trafficwar.tech",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/moeelbadri/trafficwar-sdks.git",
+    "directory": "packages/node"
+  },
+  "bugs": {
+    "url": "https://github.com/moeelbadri/trafficwar-sdks/issues"
+  },
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      },
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsup",
+    "check": "tsc --noEmit",
+    "smoke": "node test/package-smoke.mjs && node test/packed-smoke.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "keywords": [
+    "trafficwar",
+    "observability",
+    "analytics",
+    "events",
+    "server"
+  ],
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "tsup": "8.5.1",
+    "typescript": "^5.9.3",
+    "vitest": "4.1.11"
+  }
+}

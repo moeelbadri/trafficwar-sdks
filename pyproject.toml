@@ -1,0 +1,8 @@
+[tool.uv.workspace]
+members = [
+  "packages/python",
+  "examples/python/*",
+]
+
+[tool.uv.sources]
+trafficwar = { workspace = true }

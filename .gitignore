@@ -1,0 +1,26 @@
+# Node.js
+node_modules/
+dist/
+*.tgz
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+examples/python/django/db.sqlite3
+examples/python/fastapi/greetings.db
+
+# Coverage and build artifacts
+coverage/
+htmlcov/
+.coverage
+build/
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store

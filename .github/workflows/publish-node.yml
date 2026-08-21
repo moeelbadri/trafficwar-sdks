@@ -1,0 +1,42 @@
+name: Publish Node.js
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    if: startsWith(github.event.release.tag_name, 'node-v')
+    runs-on: ubuntu-latest
+    environment: npm
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.release.tag_name }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - name: Verify release tag
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: >-
+          node -e "const p=require('./packages/node/package.json');
+          if (process.env.RELEASE_TAG !== 'node-v' + p.version)
+          throw new Error('release tag and package version differ')"
+      - run: npm ci
+      - run: npm run check
+      - run: npm test
+      - run: npm run build
+      - run: npm run smoke
+      - run: npm run check:examples:node
+      - run: npm run test:examples:node
+      - run: npm audit --omit=dev
+      - name: Publish
+        working-directory: packages/node
+        run: npm publish --access public

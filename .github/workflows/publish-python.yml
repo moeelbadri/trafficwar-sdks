@@ -1,0 +1,62 @@
+name: Publish Python
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    if: startsWith(github.event.release.tag_name, 'python-v')
+    runs-on: ubuntu-latest
+    environment: pypi
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.release.tag_name }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+      - name: Verify release tag
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          python - <<'PY'
+          import os
+          import runpy
+
+          package = runpy.run_path(
+              "packages/python/src/trafficwar/_version.py"
+          )
+          expected = f"python-v{package['__version__']}"
+          if os.environ["RELEASE_TAG"] != expected:
+              raise SystemExit(
+                  f"release tag {os.environ['RELEASE_TAG']!r} != {expected!r}"
+              )
+          PY
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -e "packages/python[dev]"
+      - run: python -m pip check
+      - run: ruff check .
+        working-directory: packages/python
+      - run: ruff format --check .
+        working-directory: packages/python
+      - run: mypy src
+        working-directory: packages/python
+      - run: pytest
+        working-directory: packages/python
+      - run: python -m build packages/python
+      - run: python -m twine check packages/python/dist/*
+      - name: Smoke-test built wheel
+        run: |
+          python -m venv "$RUNNER_TEMP/trafficwar-wheel"
+          "$RUNNER_TEMP/trafficwar-wheel/bin/python" -m pip install packages/python/dist/*.whl
+          "$RUNNER_TEMP/trafficwar-wheel/bin/python" -c \
+            "from importlib.metadata import version; import trafficwar; assert trafficwar.__version__ == version('trafficwar'); assert callable(trafficwar.TrafficWar)"
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: packages/python/dist/

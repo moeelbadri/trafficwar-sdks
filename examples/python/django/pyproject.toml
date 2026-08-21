@@ -1,0 +1,24 @@
+[project]
+name = "trafficwar-django-example"
+version = "0.1.0"
+description = "Runnable Django integration example for the TrafficWar Python SDK"
+requires-python = ">=3.10"
+dependencies = [
+  "Django>=5.2,<5.3",
+  "trafficwar==1.0.0",
+]
+
+[dependency-groups]
+dev = [
+  "httpx>=0.28.1,<1",
+  "pytest>=8.3,<9",
+  "pytest-django>=4.11,<5",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "greeting_project.settings"
+addopts = "-ra --strict-markers"
+testpaths = ["tests"]
