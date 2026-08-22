@@ -136,13 +136,12 @@ def test_capture_deeply_snapshots_and_preserves_uuid_override() -> None:
     nested["values"].append(3)
     client.flush()
 
-    assert sent == [
-        {
-            "event": "snapshot",
-            "event_id": override,
-            "properties": {"original": True, "values": [1, 2]},
-        }
-    ]
+    assert len(sent) == 1
+    assert sent[0]["event"] == "snapshot"
+    assert sent[0]["event_id"] == override
+    assert sent[0]["properties"] == {"original": True, "values": [1, 2]}
+    assert isinstance(sent[0]["timestamp"], str)
+    assert sent[0]["timestamp"].endswith("Z")
     assert event["event_id"] == override
     client.close()
     http.close()
