@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import sqlite3
 from contextlib import asynccontextmanager
@@ -10,6 +11,12 @@ from typing import Annotated
 import anyio
 from fastapi import Depends, FastAPI, HTTPException, Request
 from trafficwar import AsyncTrafficWar, Event
+
+logger = logging.getLogger(__name__)
+
+
+def _report_background_error(error: Exception) -> None:
+    logger.error("TrafficWar automatic flush failed: %s", error)
 
 
 class GreetingStore:
@@ -87,6 +94,7 @@ def _new_trafficwar_client() -> AsyncTrafficWar:
         timeout=float(os.environ.get("TRAFFICWAR_TIMEOUT", "5")),
         max_retries=int(os.environ.get("TRAFFICWAR_MAX_RETRIES", "2")),
         compression="auto",
+        on_error=_report_background_error,
     )
 
 

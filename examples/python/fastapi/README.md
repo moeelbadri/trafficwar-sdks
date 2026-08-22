@@ -1,8 +1,9 @@
 # TrafficWar + FastAPI
 
-A compact FastAPI application that reads a greeting from SQLite and awaits a
-durable `hello.request` capture through `AsyncTrafficWar`. The app captures both
-successful lookups and `404` responses.
+A compact FastAPI application that reads a greeting from SQLite and awaits only
+the enqueue step for a `hello.request` event through `AsyncTrafficWar`. The
+handler responds without waiting for delivery and captures both successful
+lookups and `404` responses.
 
 `create_app()` owns a seeded in-memory SQLite connection and, unless one is
 injected, an async TrafficWar client. SQLite work runs in an AnyIO worker thread;
@@ -43,4 +44,10 @@ uv run pytest
 The integration tests drive the ASGI app through `httpx.ASGITransport`, run its
 lifespan with `asgi-lifespan`, and inject the actual local `AsyncTrafficWar` SDK
 backed by `httpx.MockTransport`. They make no network calls and verify that
-caller-owned clients remain open after app shutdown.
+caller-owned clients remain open after app shutdown. Each test explicitly
+awaits `flush()` before inspecting the bare `/v1/server/batch` array and
+generated UUIDv7 `event_id`, then closes the injected SDK and HTTP client.
+
+For the production-owned client, the FastAPI lifespan awaits `aclose()` before
+closing SQLite. SDK close already flushes queued events, so the shutdown path
+does not call `flush()` separately.

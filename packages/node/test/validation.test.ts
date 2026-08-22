@@ -1,9 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { Buffer } from "node:buffer";
+
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   TrafficWar,
   TrafficWarValidationError,
-  TRAFFICWAR_MAX_BATCH_SIZE,
   TRAFFICWAR_MAX_COMPRESSED_BODY_BYTES,
   TRAFFICWAR_MAX_DECODED_BODY_BYTES,
 } from "../src";
@@ -13,11 +14,20 @@ import type {
   TrafficWarOptions,
 } from "../src";
 
-function success(accepted = 1): Response {
+function bodyEvents(init: RequestInit): Array<Record<string, unknown>> {
+  if (!(init.body instanceof Uint8Array)) {
+    throw new Error("unexpected body");
+  }
+  return JSON.parse(Buffer.from(init.body).toString()) as Array<
+    Record<string, unknown>
+  >;
+}
+
+function success(init: RequestInit): Response {
   return new Response(
     JSON.stringify({
       status: "ok",
-      accepted,
+      accepted: bodyEvents(init).length,
       ingest_id: "ing_valid",
     }),
     {
@@ -34,6 +44,10 @@ function clientWith(fetch: TrafficWarFetch): TrafficWar {
     fetch,
   });
 }
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe("TrafficWar constructor validation", () => {
   it.each([
@@ -54,7 +68,7 @@ describe("TrafficWar constructor validation", () => {
         () =>
           new TrafficWar({
             apiKey,
-            fetch: async () => success(),
+            fetch: async (_url, init) => success(init),
           }),
       ).toThrow(/apiKey/);
     },
@@ -73,7 +87,7 @@ describe("TrafficWar constructor validation", () => {
         new TrafficWar({
           apiKey: "tw_key",
           baseUrl,
-          fetch: async () => success(),
+          fetch: async (_url, init) => success(init),
         }),
     ).toThrow(/baseUrl/);
   });
@@ -82,7 +96,7 @@ describe("TrafficWar constructor validation", () => {
     const client = new TrafficWar({
       apiKey: "tw_key",
       baseUrl: new URL("https://example.com///"),
-      fetch: async () => success(),
+      fetch: async (_url, init) => success(init),
     });
 
     expect(client.baseUrl).toBe("https://example.com");
@@ -95,8 +109,13 @@ describe("TrafficWar constructor validation", () => {
     { maxRetries: 101 },
     { compressionThresholdBytes: -1 },
     { compressionThresholdBytes: TRAFFICWAR_MAX_DECODED_BODY_BYTES + 1 },
+    { flushIntervalMs: 0 },
+    { flushIntervalMs: 1.5 },
+    { maxQueueSize: 0 },
+    { maxQueueSize: 1.5 },
     { compression: "brotli" },
     { fetch: "not-fetch" },
+    { onError: "not-callback" },
   ])("rejects invalid client options: %j", (invalid) => {
     expect(
       () =>
@@ -114,53 +133,45 @@ describe("TrafficWar event validation", () => {
     undefined,
     "event",
     1,
-    [],
     {},
     { event: "" },
     { event: "   " },
     { event: 42 },
-  ])("rejects invalid capture input: %j", async (event) => {
-    const fetch = vi.fn(async () => success());
+  ])("rejects invalid capture input: %j", (event) => {
+    const fetch = vi.fn(async (_url, init) => success(init));
     const client = clientWith(fetch);
 
-    await expect(
-      client.capture(event as unknown as TrafficWarEvent, {
-        idempotencyKey: "bad-event",
-      }),
-    ).rejects.toBeInstanceOf(TrafficWarValidationError);
+    expect(() =>
+      client.capture(event as unknown as TrafficWarEvent),
+    ).toThrow(TrafficWarValidationError);
     expect(fetch).not.toHaveBeenCalled();
   });
 
   it.each([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
     "rejects non-finite latency %s",
-    async (latency_ms) => {
-      const client = clientWith(async () => success());
-      await expect(
-        client.capture(
-          { event: "latency", latency_ms },
-          { idempotencyKey: "bad-latency" },
-        ),
-      ).rejects.toMatchObject({
-        name: "TrafficWarValidationError",
-        path: "event.latency_ms",
-        idempotencyKey: "bad-latency",
-      });
+    (latency_ms) => {
+      const client = clientWith(async (_url, init) => success(init));
+      expect(() =>
+        client.capture({ event: "latency", latency_ms }),
+      ).toThrow(
+        expect.objectContaining({
+          name: "TrafficWarValidationError",
+          path: "event.latency_ms",
+        }),
+      );
     },
   );
 
   it.each([-1, 65_536, 1.5, Number.NaN, "500"])(
     "rejects invalid status_code %s",
-    async (status_code) => {
-      const client = clientWith(async () => success());
-      await expect(
-        client.capture(
-          {
-            event: "status",
-            status_code,
-          } as unknown as TrafficWarEvent,
-          { idempotencyKey: "bad-status" },
-        ),
-      ).rejects.toMatchObject({ path: "event.status_code" });
+    (status_code) => {
+      const client = clientWith(async (_url, init) => success(init));
+      expect(() =>
+        client.capture({
+          event: "status",
+          status_code,
+        } as unknown as TrafficWarEvent),
+      ).toThrow(expect.objectContaining({ path: "event.status_code" }));
     },
   );
 
@@ -181,14 +192,14 @@ describe("TrafficWar event validation", () => {
     Number.MAX_VALUE,
     new Date("invalid"),
     null,
-  ])("rejects invalid timestamps", async (timestamp) => {
-    const client = clientWith(async () => success());
-    await expect(
-      client.capture(
-        { event: "timestamp", timestamp } as unknown as TrafficWarEvent,
-        { idempotencyKey: "bad-time" },
-      ),
-    ).rejects.toMatchObject({ path: "event.timestamp" });
+  ])("rejects invalid timestamps", (timestamp) => {
+    const client = clientWith(async (_url, init) => success(init));
+    expect(() =>
+      client.capture({
+        event: "timestamp",
+        timestamp,
+      } as unknown as TrafficWarEvent),
+    ).toThrow(expect.objectContaining({ path: "event.timestamp" }));
   });
 
   it.each([
@@ -197,13 +208,11 @@ describe("TrafficWar event validation", () => {
     "2024-02-29T23:59:59.123456789-05:30",
     1_776_771_000_000,
   ])("accepts timestamp value %s", async (timestamp) => {
-    const client = clientWith(async () => success());
-    await expect(
-      client.capture(
-        { event: "timestamp", timestamp },
-        { idempotencyKey: `time-${String(timestamp)}` },
-      ),
-    ).resolves.toMatchObject({ accepted: 1 });
+    const client = clientWith(async (_url, init) => success(init));
+    expect(() =>
+      client.capture({ event: "timestamp", timestamp }),
+    ).not.toThrow();
+    await expect(client.flush()).resolves.toMatchObject({ accepted: 1 });
   });
 
   it.each([
@@ -211,113 +220,89 @@ describe("TrafficWar event validation", () => {
     "not-a-uuid",
     "0190b0d0-acbd-7a2d-9bc",
     "0190b0d0acbd7a2d9bc09a36b7e269fb",
-  ])("rejects invalid event_id %s", async (event_id) => {
-    const client = clientWith(async () => success());
-    await expect(
-      client.capture(
-        { event: "id", event_id },
-        { idempotencyKey: "bad-id" },
-      ),
-    ).rejects.toMatchObject({ path: "event.event_id" });
-  });
-
-  it("accepts a UUID event_id and does not synthesize one when omitted", async () => {
-    const bodies: string[] = [];
-    const client = clientWith(async (_url, init) => {
-      const body = init.body;
-      if (!(body instanceof Uint8Array)) {
-        throw new Error("unexpected body");
-      }
-      bodies.push(Buffer.from(body).toString());
-      return success();
-    });
-
-    await client.capture(
-      {
-        event: "with-id",
-        event_id: "0190b0d0-acbd-7a2d-9bc0-9a36b7e269fb",
-      },
-      { idempotencyKey: "with-id" },
-    );
-    await client.capture(
-      { event: "without-id" },
-      { idempotencyKey: "without-id" },
-    );
-
-    expect(JSON.parse(bodies[0]!)).toHaveProperty(
-      "event_id",
-      "0190b0d0-acbd-7a2d-9bc0-9a36b7e269fb",
-    );
-    expect(JSON.parse(bodies[1]!)).not.toHaveProperty("event_id");
+  ])("rejects invalid event_id %s", (event_id) => {
+    const client = clientWith(async (_url, init) => success(init));
+    expect(() =>
+      client.capture({ event: "id", event_id }),
+    ).toThrow(expect.objectContaining({ path: "event.event_id" }));
   });
 
   it.each(["database", "", "SERVER", 1, null])(
     "rejects invalid span_kind %j",
-    async (span_kind) => {
-      const client = clientWith(async () => success());
-      await expect(
-        client.capture(
-          { event: "span", span_kind } as unknown as TrafficWarEvent,
-          { idempotencyKey: "bad-span" },
-        ),
-      ).rejects.toMatchObject({ path: "event.span_kind" });
+    (span_kind) => {
+      const client = clientWith(async (_url, init) => success(init));
+      expect(() =>
+        client.capture({
+          event: "span",
+          span_kind,
+        } as unknown as TrafficWarEvent),
+      ).toThrow(expect.objectContaining({ path: "event.span_kind" }));
     },
   );
 
   it.each(["user_id", "service", "service_id"])(
     "rejects token-derived field %s",
-    async (field) => {
-      const client = clientWith(async () => success());
-      await expect(
-        client.capture(
-          { event: "identity", [field]: "forged" } as unknown as TrafficWarEvent,
-          { idempotencyKey: `forbidden-${field}` },
-        ),
-      ).rejects.toMatchObject({ path: `event.${field}` });
+    (field) => {
+      const client = clientWith(async (_url, init) => success(init));
+      expect(() =>
+        client.capture({
+          event: "identity",
+          [field]: "forged",
+        } as unknown as TrafficWarEvent),
+      ).toThrow(expect.objectContaining({ path: `event.${field}` }));
     },
   );
 
-  it("rejects non-string wire string fields", async () => {
-    const client = clientWith(async () => success());
-    await expect(
-      client.capture(
-        { event: "types", trace_id: 123 } as unknown as TrafficWarEvent,
-        { idempotencyKey: "bad-string" },
-      ),
-    ).rejects.toMatchObject({ path: "event.trace_id" });
+  it("rejects non-string wire string fields", () => {
+    const client = clientWith(async (_url, init) => success(init));
+    expect(() =>
+      client.capture({
+        event: "types",
+        trace_id: 123,
+      } as unknown as TrafficWarEvent),
+    ).toThrow(expect.objectContaining({ path: "event.trace_id" }));
   });
 
-  it("accepts nested JSON values in properties", async () => {
-    const client = clientWith(async () => success());
-    await expect(
-      client.capture(
-        {
-          event: "json",
-          properties: {
-            nullable: null,
-            scalar: true,
-            nested: [1, "two", { three: false }],
-          },
-        },
-        { idempotencyKey: "json-values" },
-      ),
-    ).resolves.toMatchObject({ accepted: 1 });
+  it("accepts and snapshots nested JSON values in properties", async () => {
+    let sent: Array<Record<string, unknown>> = [];
+    const client = clientWith(async (_url, init) => {
+      sent = bodyEvents(init);
+      return success(init);
+    });
+    const nested: Array<number | string | { three: boolean }> = [
+      1,
+      "two",
+      { three: false },
+    ];
+    client.capture({
+      event: "json",
+      properties: {
+        nullable: null,
+        scalar: true,
+        nested,
+      },
+    });
+    nested.push("late");
+
+    await client.flush();
+    expect(sent[0]?.properties).toEqual({
+      nullable: null,
+      scalar: true,
+      nested: [1, "two", { three: false }],
+    });
   });
 
-  it("rejects circular JSON", async () => {
+  it("rejects circular JSON synchronously", () => {
     const properties: Record<string, unknown> = {};
     properties.self = properties;
-    const client = clientWith(async () => success());
+    const client = clientWith(async (_url, init) => success(init));
 
-    await expect(
-      client.capture(
-        { event: "circular", properties } as unknown as TrafficWarEvent,
-        { idempotencyKey: "circular-1" },
-      ),
-    ).rejects.toMatchObject({
-      name: "TrafficWarValidationError",
-      idempotencyKey: "circular-1",
-    });
+    expect(() =>
+      client.capture({
+        event: "circular",
+        properties,
+      } as unknown as TrafficWarEvent),
+    ).toThrow(TrafficWarValidationError);
   });
 
   it.each([
@@ -325,176 +310,173 @@ describe("TrafficWar event validation", () => {
     { value: undefined, label: "undefined" },
     { value: new Date(), label: "Date" },
     { value: new Map(), label: "Map" },
-  ])("rejects non-JSON property value $label", async ({ value }) => {
-    const client = clientWith(async () => success());
-    await expect(
-      client.capture(
-        {
-          event: "not-json",
-          properties: { value },
-        } as unknown as TrafficWarEvent,
-        { idempotencyKey: "not-json" },
-      ),
-    ).rejects.toBeInstanceOf(TrafficWarValidationError);
+  ])("rejects non-JSON property value $label", ({ value }) => {
+    const client = clientWith(async (_url, init) => success(init));
+    expect(() =>
+      client.capture({
+        event: "not-json",
+        properties: { value },
+      } as unknown as TrafficWarEvent),
+    ).toThrow(TrafficWarValidationError);
   });
 
-  it("converts serialization getter failures to validation errors", async () => {
+  it("reads nested getters once while taking the snapshot", async () => {
     let reads = 0;
-    const properties = Object.defineProperty({}, "unstable", {
+    const properties = Object.defineProperty({}, "stable", {
       enumerable: true,
       get() {
         reads += 1;
-        if (reads > 1) {
-          throw new Error("getter failed");
-        }
-        return "first";
+        return `read-${reads}`;
       },
     });
-    const client = clientWith(async () => success());
+    let sent: Array<Record<string, unknown>> = [];
+    const client = clientWith(async (_url, init) => {
+      sent = bodyEvents(init);
+      return success(init);
+    });
 
-    await expect(
-      client.capture(
-        { event: "getter", properties } as TrafficWarEvent,
-        { idempotencyKey: "getter-1" },
-      ),
-    ).rejects.toBeInstanceOf(TrafficWarValidationError);
+    client.capture({
+      event: "getter",
+      properties,
+    } as TrafficWarEvent);
+    expect(reads).toBe(1);
+    await client.flush();
+
+    expect(reads).toBe(1);
+    expect(sent[0]?.properties).toEqual({ stable: "read-1" });
   });
 });
 
-describe("TrafficWar batch and request validation", () => {
-  it.each([null, {}, "events", [], 42])(
-    "rejects invalid or empty batches: %j",
-    async (events) => {
-      const fetch = vi.fn(async () => success());
+describe("TrafficWar array and queue validation", () => {
+  it.each([null, {}, { event: "not-a-batch" }, "events", [], 42])(
+    "rejects invalid or empty captureBatch input: %j",
+    (events) => {
+      const fetch = vi.fn(async (_url, init) => success(init));
       const client = clientWith(fetch);
-      await expect(
-        client.captureBatch(events as unknown as TrafficWarEvent[], {
-          idempotencyKey: "bad-batch",
-        }),
-      ).rejects.toBeInstanceOf(TrafficWarValidationError);
+
+      expect(() =>
+        client.captureBatch(
+          events as unknown as readonly TrafficWarEvent[],
+        ),
+      ).toThrow(TrafficWarValidationError);
       expect(fetch).not.toHaveBeenCalled();
     },
   );
 
-  it("rejects more than 10,000 events before serialization", async () => {
-    const fetch = vi.fn(async () => success());
-    const client = clientWith(fetch);
-    const event = { event: "over" };
-    const events = Array.from(
-      { length: TRAFFICWAR_MAX_BATCH_SIZE + 1 },
-      () => event,
-    );
+  it("reports the failing array index", () => {
+    const client = clientWith(async (_url, init) => success(init));
+    expect(() =>
+      client.capture([
+        { event: "valid" },
+        { event: "", latency_ms: 1 },
+      ]),
+    ).toThrow(expect.objectContaining({ path: "events[1].event" }));
+  });
 
-    await expect(
-      client.captureBatch(events, { idempotencyKey: "too-many" }),
-    ).rejects.toMatchObject({ path: "events" });
+  it("reports a sparse event array at its first missing index", () => {
+    const fetch = vi.fn(async (_url, init) => success(init));
+    const client = clientWith(fetch);
+    const events = new Array<TrafficWarEvent>(3);
+    events[0] = { event: "first" };
+    events[2] = { event: "third" };
+
+    expect(() => client.capture(events)).toThrow(
+      expect.objectContaining({
+        name: "TrafficWarValidationError",
+        path: "events[1]",
+      }),
+    );
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it("reports the failing batch index", async () => {
-    const client = clientWith(async () => success(2));
-    await expect(
-      client.captureBatch(
-        [
-          { event: "valid" },
-          { event: "", latency_ms: 1 },
-        ],
-        { idempotencyKey: "indexed" },
-      ),
-    ).rejects.toMatchObject({ path: "events[1].event" });
-  });
-
-  it("rejects duplicate event IDs in one batch", async () => {
+  it("rejects duplicate caller event IDs in one enqueue", () => {
     const event_id = "0190b0d0-acbd-7a2d-9bc0-9a36b7e269fb";
-    const client = clientWith(async () => success(2));
-    await expect(
-      client.captureBatch(
-        [
-          { event: "one", event_id },
-          { event: "two", event_id },
-        ],
-        { idempotencyKey: "duplicate" },
-      ),
-    ).rejects.toMatchObject({ path: "events[1].event_id" });
-  });
+    const client = clientWith(async (_url, init) => success(init));
 
-  it.each([
-    "",
-    "contains space",
-    "\ttab",
-    "é",
-    "x".repeat(257),
-  ])("rejects invalid custom idempotency key", async (idempotencyKey) => {
-    const fetch = vi.fn(async () => success());
-    const client = clientWith(fetch);
-    await expect(
-      client.capture(
-        { event: "key" },
-        { idempotencyKey },
-      ),
-    ).rejects.toMatchObject({ path: "options.idempotencyKey" });
-    expect(fetch).not.toHaveBeenCalled();
-  });
-
-  it("rejects a non-AbortSignal signal", async () => {
-    const client = clientWith(async () => success());
-    await expect(
-      client.capture(
-        { event: "signal" },
-        {
-          idempotencyKey: "signal-1",
-          signal: {} as AbortSignal,
-        },
-      ),
-    ).rejects.toMatchObject({
-      path: "options.signal",
-      idempotencyKey: "signal-1",
-    });
-  });
-
-  it("enforces the 8 MiB decoded body limit before gzip", async () => {
-    const fetch = vi.fn(async () => success());
-    const client = new TrafficWar({
-      apiKey: "tw_decoded_limit",
-      compression: "gzip",
-      fetch,
-    });
-
-    await expect(
-      client.capture(
-        {
-          event: "too-large",
-          properties: {
-            payload: "x".repeat(TRAFFICWAR_MAX_DECODED_BODY_BYTES),
-          },
-        },
-        { idempotencyKey: "decoded-limit" },
-      ),
-    ).rejects.toThrow(
-      `Decoded request body exceeds ${TRAFFICWAR_MAX_DECODED_BODY_BYTES} bytes`,
+    expect(() =>
+      client.capture([
+        { event: "one", event_id },
+        { event: "two", event_id },
+      ]),
+    ).toThrow(
+      expect.objectContaining({ path: "events[1].event_id" }),
     );
-    expect(fetch).not.toHaveBeenCalled();
   });
 
-  it("enforces the 2 MiB wire limit in identity mode", async () => {
-    const fetch = vi.fn(async () => success());
+  it("rejects pending IDs atomically and allows reuse after acknowledgement", async () => {
+    const pendingId = "0190b0d0-acbd-7a2d-9bc0-9a36b7e269fb";
+    const stagedId = "550e8400-e29b-41d4-a716-446655440000";
+    const calls: RequestInit[] = [];
+    const client = clientWith(async (_url, init) => {
+      calls.push(init);
+      return success(init);
+    });
+    client.capture({ event: "pending", event_id: pendingId });
+
+    expect(() =>
+      client.capture([
+        { event: "must-not-stage", event_id: stagedId },
+        { event: "duplicate", event_id: pendingId },
+      ]),
+    ).toThrow(
+      expect.objectContaining({ path: "events[1].event_id" }),
+    );
+
+    await expect(client.flush()).resolves.toMatchObject({ accepted: 1 });
+    expect(bodyEvents(calls[0]!)).toMatchObject([
+      { event: "pending", event_id: pendingId },
+    ]);
+
+    expect(() =>
+      client.capture([
+        { event: "reuse-delivered", event_id: pendingId },
+        { event: "atomic-id-was-not-reserved", event_id: stagedId },
+      ]),
+    ).not.toThrow();
+    await expect(client.flush()).resolves.toMatchObject({ accepted: 2 });
+  });
+
+  it("rejects an enqueue that would exceed the configured queue cap atomically", async () => {
+    const calls: RequestInit[] = [];
+    const client = new TrafficWar({
+      apiKey: "tw_atomic_cap",
+      compression: "none",
+      maxQueueSize: 3,
+      fetch: async (_url, init) => {
+        calls.push(init);
+        return success(init);
+      },
+    });
+    client.capture([{ event: "one" }, { event: "two" }]);
+
+    expect(() =>
+      client.capture([{ event: "three" }, { event: "four" }]),
+    ).toThrow(expect.objectContaining({ path: "queue" }));
+
+    const result = await client.flush();
+    expect(result.accepted).toBe(2);
+    expect(bodyEvents(calls[0]!)).toHaveLength(2);
+  });
+
+  it("retains a single event that exceeds the wire limit and surfaces it from flush", async () => {
+    vi.useFakeTimers();
+    const fetch = vi.fn(async (_url, init) => success(init));
     const client = new TrafficWar({
       apiKey: "tw_wire_limit",
       compression: "none",
       fetch,
     });
+    client.capture({
+      event: "too-large",
+      properties: {
+        payload: "x".repeat(TRAFFICWAR_MAX_COMPRESSED_BODY_BYTES),
+      },
+    });
 
-    await expect(
-      client.capture(
-        {
-          event: "too-large",
-          properties: {
-            payload: "x".repeat(TRAFFICWAR_MAX_COMPRESSED_BODY_BYTES),
-          },
-        },
-        { idempotencyKey: "wire-limit" },
-      ),
-    ).rejects.toThrow(/wire limit/);
+    await expect(client.flush()).rejects.toMatchObject({
+      name: "TrafficWarValidationError",
+      path: "body",
+    });
     expect(fetch).not.toHaveBeenCalled();
   });
 });

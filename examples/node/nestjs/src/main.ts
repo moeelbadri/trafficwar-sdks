@@ -24,10 +24,19 @@ async function main(): Promise<void> {
   const trafficwar = new TrafficWar({
     apiKey,
     ...(baseUrl ? { baseUrl } : {}),
+    onError(error) {
+      console.error("TrafficWar automatic flush failed", error);
+    },
   });
-  const app = await NestFactory.create<NestExpressApplication>(
-    AppModule.register(trafficwar),
-  );
+  let app: NestExpressApplication;
+  try {
+    app = await NestFactory.create<NestExpressApplication>(
+      AppModule.register(trafficwar),
+    );
+  } catch (error) {
+    await trafficwar.close();
+    throw error;
+  }
   app.enableShutdownHooks();
 
   const port = readPort();

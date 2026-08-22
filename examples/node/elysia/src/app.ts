@@ -62,14 +62,14 @@ export function createApp(trafficwar: TrafficWar) {
       }
       return undefined;
     })
-    .get("/hello/:name", async ({ params, set }) => {
+    .get("/hello/:name", ({ params, set }) => {
       const requestStartedAt = performance.now();
       const queryStartedAt = performance.now();
       const row = greetings.findByName(params.name);
       const queryLatencyMs = performance.now() - queryStartedAt;
       const statusCode = row ? 200 : 404;
 
-      await trafficwar.capture({
+      trafficwar.capture({
         event: "hello.request",
         distinct_id: params.name,
         path: "/hello/:name",

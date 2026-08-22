@@ -18,8 +18,8 @@ export class HelloController {
   ) {}
 
   @Get(":name")
-  async hello(@Param("name") name: string): Promise<Greeting> {
-    const greeting = await this.greetings.findGreeting(name);
+  hello(@Param("name") name: string): Greeting {
+    const greeting = this.greetings.findGreeting(name);
     if (!greeting) {
       throw new NotFoundException("Greeting not found");
     }

@@ -46,7 +46,20 @@ export type TrafficWarFetch = (
   init: RequestInit,
 ) => Promise<Response>;
 
-export interface TrafficWarOptions {
+export type TrafficWarErrorHandler = (
+  error: unknown,
+) => void | Promise<void>;
+
+export interface TrafficWarQueueOptions {
+  /** Delay from the first pending event before an automatic flush. */
+  flushIntervalMs?: number;
+  /** Maximum number of unacknowledged events held by this client. */
+  maxQueueSize?: number;
+  /** Receives errors from automatic background flushes. */
+  onError?: TrafficWarErrorHandler;
+}
+
+export interface TrafficWarOptions extends TrafficWarQueueOptions {
   apiKey: string;
   baseUrl?: string | URL;
   timeoutMs?: number;
@@ -56,18 +69,14 @@ export interface TrafficWarOptions {
   fetch?: TrafficWarFetch;
 }
 
-export interface TrafficWarRequestOptions {
-  /**
-   * A caller-defined key for coordinating retries across process boundaries.
-   * It must contain 1-256 visible ASCII characters.
-   */
-  idempotencyKey?: string;
-  signal?: AbortSignal;
-}
-
 export interface IngestResult {
   status: "ok";
   accepted: number;
   ingestId: string;
   idempotencyKey: string;
+}
+
+export interface FlushResult {
+  accepted: number;
+  batches: readonly IngestResult[];
 }

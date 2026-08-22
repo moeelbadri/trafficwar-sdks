@@ -34,6 +34,9 @@ async function main(): Promise<void> {
   const trafficwar = new TrafficWar({
     apiKey,
     ...(baseUrl ? { baseUrl } : {}),
+    onError(error) {
+      console.error("TrafficWar automatic flush failed", error);
+    },
   });
   const example = createApp(trafficwar);
   const server = createServer(example.app);
@@ -49,7 +52,11 @@ async function main(): Promise<void> {
       });
     });
   } catch (error) {
-    example.close();
+    try {
+      await trafficwar.close();
+    } finally {
+      example.close();
+    }
     throw error;
   }
 
@@ -66,7 +73,11 @@ async function main(): Promise<void> {
     try {
       await closeServer(server);
     } finally {
-      example.close();
+      try {
+        await trafficwar.close();
+      } finally {
+        example.close();
+      }
     }
   };
 

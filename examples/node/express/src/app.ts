@@ -63,14 +63,14 @@ export function createApp(trafficwar: TrafficWar): ExpressExample {
   const app = express();
   app.disable("x-powered-by");
 
-  app.get("/hello/:name", async (request, response) => {
+  app.get("/hello/:name", (request, response) => {
     const requestStartedAt = performance.now();
     const queryStartedAt = performance.now();
     const row = greetings.findByName(request.params.name);
     const queryLatencyMs = performance.now() - queryStartedAt;
     const statusCode = row ? 200 : 404;
 
-    await trafficwar.capture({
+    trafficwar.capture({
       event: "hello.request",
       distinct_id: request.params.name,
       path: "/hello/:name",
