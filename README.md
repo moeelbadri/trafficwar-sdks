@@ -9,13 +9,14 @@ Official server-side SDKs for sending events to
 These packages target trusted backend processes. They send bare arrays to
 `https://ingest.trafficwar.tech/v1/server/batch`, never the browser/CORS routes.
 
-> **Breaking change:** `@trafficwar/node` 2.0.0 introduces this automatic
-> batching API. The equivalent Python package update remains unreleased.
-
 ## Node.js
 
 ```bash
 npm install @trafficwar/node
+# or
+pnpm add @trafficwar/node
+# or
+bun add @trafficwar/node
 ```
 
 ```ts
@@ -42,6 +43,9 @@ trafficwar.capture([
 const flushed = await trafficwar.close();
 console.log(flushed.accepted, flushed.batches.length);
 ```
+
+Pass `debug: true` to the constructor to print safe batch lifecycle logs with
+`console.debug`. Debug logging is disabled by default.
 
 ## Synchronous Python
 

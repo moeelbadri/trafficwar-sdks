@@ -170,6 +170,21 @@ function validateIntegerOption(
   return actual;
 }
 
+function validateBooleanOption(
+  name: string,
+  value: unknown,
+  fallback: boolean,
+): boolean {
+  const actual = value ?? fallback;
+  if (typeof actual !== "boolean") {
+    throw new TrafficWarValidationError(
+      `${name} must be a boolean`,
+      { path: `options.${name}` },
+    );
+  }
+  return actual;
+}
+
 function validateCompression(value: unknown): CompressionMode {
   const actual = value ?? "auto";
   if (actual !== "auto" && actual !== "gzip" && actual !== "none") {
@@ -477,6 +492,7 @@ function parseSuccess(
 
 export class TrafficWar {
   readonly baseUrl: string;
+  readonly debug: boolean;
   readonly timeoutMs: number;
   readonly maxRetries: number;
   readonly compression: CompressionMode;
@@ -514,6 +530,7 @@ export class TrafficWar {
 
     this.#apiKey = validateApiKey(options.apiKey);
     this.baseUrl = normalizeBaseUrl(options.baseUrl);
+    this.debug = validateBooleanOption("debug", options.debug, false);
     this.timeoutMs = validateIntegerOption(
       "timeoutMs",
       options.timeoutMs,
@@ -568,6 +585,25 @@ export class TrafficWar {
         return globalThis.fetch(input, init);
       });
     this.#onError = options.onError;
+    this.#debugLog("client initialized", {
+      baseUrl: this.baseUrl,
+      compression: this.compression,
+      flushIntervalMs: this.flushIntervalMs,
+      maxQueueSize: this.maxQueueSize,
+      maxRetries: this.maxRetries,
+      timeoutMs: this.timeoutMs,
+    });
+  }
+
+  #debugLog(message: string, details: Record<string, unknown>): void {
+    if (!this.debug) {
+      return;
+    }
+    try {
+      console.debug(`[TrafficWar] ${message}`, details);
+    } catch {
+      // Diagnostics must never affect capture or delivery.
+    }
   }
 
   capture(
@@ -647,8 +683,16 @@ export class TrafficWar {
       this.#pendingEventIds.add(event.event_id as string);
     }
     this.#pendingCount += normalized.length;
+    this.#debugLog("events queued", {
+      added: normalized.length,
+      pending: this.#pendingCount,
+    });
     if (this.#pendingCount >= TRAFFICWAR_MAX_BATCH_SIZE) {
       this.#clearTimer();
+      this.#debugLog("automatic flush triggered", {
+        pending: this.#pendingCount,
+        reason: "batch-size",
+      });
       this.#startBackgroundDrain();
     } else {
       this.#ensureTimer();
@@ -669,6 +713,9 @@ export class TrafficWar {
   }
 
   flush(): Promise<FlushResult> {
+    this.#debugLog("manual flush requested", {
+      pending: this.#pendingCount,
+    });
     if (this.#closePromise) {
       return this.#closePromise;
     }
@@ -684,6 +731,9 @@ export class TrafficWar {
       return this.#closePromise;
     }
 
+    this.#debugLog("close requested", {
+      pending: this.#pendingCount,
+    });
     this.#clearTimer();
     this.#closing = true;
     let closing!: Promise<FlushResult>;
@@ -701,6 +751,10 @@ export class TrafficWar {
 
         this.#clearTimer();
         this.#closed = true;
+        this.#debugLog("client closed", {
+          accepted,
+          batches: batches.length,
+        });
         return { accepted, batches };
       } finally {
         if (this.#closePromise === closing) {
@@ -730,10 +784,18 @@ export class TrafficWar {
       if (this.#timer === timer) {
         this.#timer = undefined;
       }
+      this.#debugLog("automatic flush triggered", {
+        pending: this.#pendingCount,
+        reason: "interval",
+      });
       this.#startBackgroundDrain();
     }, this.flushIntervalMs);
     timer.unref();
     this.#timer = timer;
+    this.#debugLog("flush timer scheduled", {
+      delayMs: this.flushIntervalMs,
+      pending: this.#pendingCount,
+    });
   }
 
   #clearTimer(): void {
@@ -792,8 +854,25 @@ export class TrafficWar {
 
     let drain!: Promise<FlushResult>;
     drain = (async () => {
+      this.#debugLog("flush started", {
+        pending: this.#pendingCount,
+      });
       try {
-        return await this.#drain();
+        const result = await this.#drain();
+        this.#debugLog("flush completed", {
+          accepted: result.accepted,
+          batches: result.batches.length,
+          pending: this.#pendingCount,
+        });
+        return result;
+      } catch (error) {
+        this.#debugLog("flush failed", {
+          errorMessage:
+            error instanceof Error ? error.message : String(error),
+          errorName: error instanceof Error ? error.name : typeof error,
+          pending: this.#pendingCount,
+        });
+        throw error;
       } finally {
         if (this.#drainPromise === drain) {
           this.#drainPromise = undefined;
@@ -848,7 +927,14 @@ export class TrafficWar {
           this.compressionThresholdBytes,
         );
         this.#queue.splice(0, count);
-        return { ...prepared, events, idempotencyKey };
+        const batch = { ...prepared, events, idempotencyKey };
+        this.#debugLog("batch prepared", {
+          bodyBytes: prepared.body.byteLength,
+          contentEncoding: prepared.contentEncoding ?? "identity",
+          events: events.length,
+          idempotencyKey,
+        });
+        return batch;
       } catch (error) {
         if (!(error instanceof PreparedRequestTooLarge)) {
           throw error;
@@ -909,6 +995,13 @@ export class TrafficWar {
         );
       }
 
+      this.#debugLog("request attempt", {
+        attempt: attempt + 1,
+        bodyBytes: batch.body.byteLength,
+        events: batch.events.length,
+        idempotencyKey: batch.idempotencyKey,
+        maxAttempts: this.maxRetries + 1,
+      });
       let result: AttemptResult;
       try {
         result = await executeAttempt(
@@ -952,8 +1045,15 @@ export class TrafficWar {
           );
         }
 
+        const delayMs = retryDelayMs(attempt, undefined);
+        this.#debugLog("request retry scheduled", {
+          attempt: attempt + 1,
+          delayMs,
+          idempotencyKey: batch.idempotencyKey,
+          reason: failure.timedOut ? "timeout" : "transport",
+        });
         try {
-          await sleep(retryDelayMs(attempt, undefined), signal);
+          await sleep(delayMs, signal);
         } catch (cause) {
           throw new TrafficWarConnectionError(
             "TrafficWar request was aborted",
@@ -971,12 +1071,19 @@ export class TrafficWar {
 
       const parsed = parseBody(result.text);
       if (result.response.ok) {
-        return parseSuccess(
+        const ingest = parseSuccess(
           result.response,
           parsed,
           batch.events.length,
           batch.idempotencyKey,
         );
+        this.#debugLog("request accepted", {
+          accepted: ingest.accepted,
+          attempt: attempt + 1,
+          idempotencyKey: batch.idempotencyKey,
+          ingestId: ingest.ingestId,
+        });
+        return ingest;
       }
 
       if (
@@ -988,8 +1095,15 @@ export class TrafficWar {
           retryAfter === undefined ||
           retryAfter <= MAX_RETRY_AFTER_SECONDS
         ) {
+          const delayMs = retryDelayMs(attempt, retryAfter);
+          this.#debugLog("request retry scheduled", {
+            attempt: attempt + 1,
+            delayMs,
+            idempotencyKey: batch.idempotencyKey,
+            reason: `http-${result.response.status}`,
+          });
           try {
-            await sleep(retryDelayMs(attempt, retryAfter), signal);
+            await sleep(delayMs, signal);
           } catch (cause) {
             throw new TrafficWarConnectionError(
               "TrafficWar request was aborted",
@@ -1006,6 +1120,11 @@ export class TrafficWar {
         }
       }
 
+      this.#debugLog("request rejected", {
+        attempt: attempt + 1,
+        idempotencyKey: batch.idempotencyKey,
+        status: result.response.status,
+      });
       throw buildApiError(
         result.response,
         parsed,

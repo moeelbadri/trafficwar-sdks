@@ -114,6 +114,7 @@ describe("TrafficWar constructor validation", () => {
     { maxQueueSize: 0 },
     { maxQueueSize: 1.5 },
     { compression: "brotli" },
+    { debug: "yes" },
     { fetch: "not-fetch" },
     { onError: "not-callback" },
   ])("rejects invalid client options: %j", (invalid) => {

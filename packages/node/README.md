@@ -2,13 +2,14 @@
 
 Official, dependency-free TrafficWar server SDK for Node.js 22 and newer.
 
-> **Breaking change in 2.0.0:** `capture` now enqueues events for automatic
-> batching instead of waiting for an individual ingestion response.
-
 ## Install
 
 ```sh
 npm install @trafficwar/node
+# or
+pnpm add @trafficwar/node
+# or
+bun add @trafficwar/node
 ```
 
 ## Capture events
@@ -72,6 +73,17 @@ const trafficwar = new TrafficWar({
 If enqueueing would exceed the configured queue limit, `capture` throws a
 `TrafficWarValidationError` and enqueues none of that call.
 
+Set `debug: true` to print queue, flush, request, retry, and acknowledgement
+diagnostics with `console.debug`. Debug logging is off by default and never
+includes API keys or queued event payloads.
+
+```ts
+const trafficwar = new TrafficWar({
+  apiKey: process.env.TRAFFICWAR_API_KEY!,
+  debug: true,
+});
+```
+
 The SDK generates a process-monotonic RFC 9562 UUIDv7 `event_id` for each event
 that omits one. A caller may override it with any valid UUID. Caller-owned
 objects are never modified.
@@ -134,6 +146,8 @@ attempt, `flush`, or `close` retries that same batch, and explicit `flush` or
 
 - `apiKey` (required): TrafficWar server API key.
 - `baseUrl`: ingest origin. Defaults to `https://ingest.trafficwar.tech`.
+- `debug`: print safe batch lifecycle diagnostics with `console.debug`.
+  Defaults to `false`.
 - `timeoutMs`: timeout for each attempt. Defaults to 30,000 ms, safely above
   TrafficWar's 10-second durable acknowledgement window.
 - `maxRetries`: retries after the first attempt. Defaults to 3.
