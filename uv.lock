@@ -1476,7 +1476,7 @@ dev = [
 requires-dist = [
     { name = "fastapi", specifier = ">=0.116,<1" },
     { name = "trafficwar", editable = "packages/python" },
-    { name = "uvicorn", extras = ["standard"], specifier = ">=0.35,<1" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.52.4,<1" },
 ]
 
 [package.metadata.requires-dev]
