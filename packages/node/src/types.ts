@@ -62,6 +62,8 @@ export interface TrafficWarQueueOptions {
 export interface TrafficWarOptions extends TrafficWarQueueOptions {
   apiKey: string;
   baseUrl?: string | URL;
+  /** Print batch lifecycle diagnostics without event payloads or credentials. */
+  debug?: boolean;
   timeoutMs?: number;
   maxRetries?: number;
   compression?: CompressionMode;

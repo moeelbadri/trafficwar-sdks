@@ -309,8 +309,73 @@ describe("TrafficWar queued capture", () => {
     expect(client.maxQueueSize).toBe(
       TRAFFICWAR_DEFAULT_MAX_QUEUE_SIZE,
     );
+    expect(client.debug).toBe(false);
     expect(client.compression).toBe("auto");
     expect(client.compressionThresholdBytes).toBe(1024);
+  });
+
+  it("prints safe batch lifecycle diagnostics when debug is enabled", async () => {
+    const debug = vi
+      .spyOn(console, "debug")
+      .mockImplementation(() => undefined);
+    try {
+      const client = new TrafficWar({
+        apiKey: "tw_debug_secret",
+        compression: "none",
+        debug: true,
+        fetch: async (_url, init) => successResponse(init, "debug"),
+      });
+
+      client.capture({
+        event: "private.event",
+        properties: { token: "private-property" },
+      });
+      await client.flush();
+      await client.close();
+
+      const messages = debug.mock.calls.map(([message]) => message);
+      expect(messages).toEqual(
+        expect.arrayContaining([
+          "[TrafficWar] client initialized",
+          "[TrafficWar] events queued",
+          "[TrafficWar] flush timer scheduled",
+          "[TrafficWar] manual flush requested",
+          "[TrafficWar] flush started",
+          "[TrafficWar] batch prepared",
+          "[TrafficWar] request attempt",
+          "[TrafficWar] request accepted",
+          "[TrafficWar] flush completed",
+          "[TrafficWar] client closed",
+        ]),
+      );
+
+      const output = JSON.stringify(debug.mock.calls);
+      expect(output).not.toContain("tw_debug_secret");
+      expect(output).not.toContain("private.event");
+      expect(output).not.toContain("private-property");
+    } finally {
+      debug.mockRestore();
+    }
+  });
+
+  it("does not print diagnostics when debug is disabled", async () => {
+    const debug = vi
+      .spyOn(console, "debug")
+      .mockImplementation(() => undefined);
+    try {
+      const client = new TrafficWar({
+        apiKey: "tw_quiet",
+        compression: "none",
+        fetch: async (_url, init) => successResponse(init, "quiet"),
+      });
+
+      client.capture({ event: "quiet" });
+      await client.close();
+
+      expect(debug).not.toHaveBeenCalled();
+    } finally {
+      debug.mockRestore();
+    }
   });
 
   it("unrefs the one-shot queue timer", async () => {

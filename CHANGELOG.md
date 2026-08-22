@@ -2,6 +2,13 @@
 
 All notable changes to the TrafficWar server SDKs are documented here.
 
+## 2.1.0 (Node.js) - 2026-08-22
+
+- Add opt-in safe batch lifecycle logging with `debug: true`.
+- Document npm, pnpm, and Bun installation commands for `@trafficwar/node`.
+- Remove the 2.0.0 breaking-change banner from the Node.js README install
+  section.
+
 ## 2.0.0 (Node.js) / Unreleased (Python) - 2026-08-22
 
 Published for npm as `@trafficwar/node` 2.0.0. The equivalent Python package
