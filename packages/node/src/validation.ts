@@ -40,7 +40,7 @@ const FORBIDDEN_IDENTITY_FIELDS = ["user_id", "service", "service_id"] as const;
 function validationError(
   message: string,
   path: string,
-  idempotencyKey: string,
+  idempotencyKey: string | undefined,
   cause?: unknown,
 ): TrafficWarValidationError {
   return new TrafficWarValidationError(message, {
@@ -50,18 +50,18 @@ function validationError(
   });
 }
 
-function assertJsonValue(
+function snapshotJsonValue(
   value: unknown,
   path: string,
   ancestors: WeakSet<object>,
-  idempotencyKey: string,
-): void {
+  idempotencyKey: string | undefined,
+): unknown {
   if (
     value === null ||
     typeof value === "string" ||
     typeof value === "boolean"
   ) {
-    return;
+    return value;
   }
 
   if (typeof value === "number") {
@@ -72,7 +72,7 @@ function assertJsonValue(
         idempotencyKey,
       );
     }
-    return;
+    return value;
   }
 
   if (typeof value !== "object") {
@@ -113,6 +113,7 @@ function assertJsonValue(
   ancestors.add(value);
   try {
     if (Array.isArray(value)) {
+      const snapshot: unknown[] = [];
       for (let index = 0; index < value.length; index += 1) {
         if (!(index in value)) {
           throw validationError(
@@ -121,19 +122,28 @@ function assertJsonValue(
             idempotencyKey,
           );
         }
-        assertJsonValue(
-          value[index],
-          `${path}[${index}]`,
-          ancestors,
-          idempotencyKey,
+        snapshot.push(
+          snapshotJsonValue(
+            value[index],
+            `${path}[${index}]`,
+            ancestors,
+            idempotencyKey,
+          ),
         );
       }
-      return;
+      return snapshot;
     }
 
+    const snapshot: Record<string, unknown> = Object.create(null);
     for (const [key, child] of Object.entries(value)) {
-      assertJsonValue(child, `${path}.${key}`, ancestors, idempotencyKey);
+      snapshot[key] = snapshotJsonValue(
+        child,
+        `${path}.${key}`,
+        ancestors,
+        idempotencyKey,
+      );
     }
+    return snapshot;
   } finally {
     ancestors.delete(value);
   }
@@ -142,7 +152,7 @@ function assertJsonValue(
 function normalizeTimestamp(
   timestamp: unknown,
   path: string,
-  idempotencyKey: string,
+  idempotencyKey: string | undefined,
 ): string | number {
   if (timestamp instanceof Date) {
     if (!Number.isFinite(timestamp.getTime())) {
@@ -226,7 +236,7 @@ function normalizeTimestamp(
 export function normalizeEvent(
   input: TrafficWarEvent,
   path: string,
-  idempotencyKey: string,
+  idempotencyKey?: string,
 ): NormalizedEvent {
   if (input === null || typeof input !== "object" || Array.isArray(input)) {
     throw validationError(
@@ -351,7 +361,12 @@ export function normalizeEvent(
   }
 
   try {
-    assertJsonValue(normalized, path, new WeakSet(), idempotencyKey);
+    return snapshotJsonValue(
+      normalized,
+      path,
+      new WeakSet(),
+      idempotencyKey,
+    ) as NormalizedEvent;
   } catch (error) {
     if (error instanceof TrafficWarValidationError) {
       throw error;
@@ -363,44 +378,6 @@ export function normalizeEvent(
       error,
     );
   }
-
-  return normalized as NormalizedEvent;
-}
-
-export function assertUniqueEventIds(
-  events: readonly NormalizedEvent[],
-  idempotencyKey: string,
-): void {
-  const seen = new Set<string>();
-  for (let index = 0; index < events.length; index += 1) {
-    const eventId = events[index]?.event_id;
-    if (typeof eventId !== "string") {
-      continue;
-    }
-    if (seen.has(eventId)) {
-      throw validationError(
-        `events[${index}].event_id duplicates another event_id in this batch`,
-        `events[${index}].event_id`,
-        idempotencyKey,
-      );
-    }
-    seen.add(eventId);
-  }
-}
-
-export function validateIdempotencyKey(value: unknown): string {
-  if (
-    typeof value !== "string" ||
-    value.length === 0 ||
-    value.length > 256 ||
-    !/^[\x21-\x7e]+$/.test(value)
-  ) {
-    throw new TrafficWarValidationError(
-      "idempotencyKey must contain 1-256 visible ASCII characters",
-      { path: "options.idempotencyKey" },
-    );
-  }
-  return value;
 }
 
 export function serializeJson(

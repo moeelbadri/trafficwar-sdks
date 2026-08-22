@@ -6,7 +6,10 @@ import type { TrafficWar } from "@trafficwar/node";
 
 import { GreetingService } from "./greeting.service.js";
 import { HelloController } from "./hello.controller.js";
-import { TRAFFICWAR } from "./trafficwar.provider.js";
+import {
+  TRAFFICWAR,
+  TrafficWarLifecycle,
+} from "./trafficwar.provider.js";
 
 @Module({})
 export class AppModule {
@@ -16,6 +19,7 @@ export class AppModule {
       controllers: [HelloController],
       providers: [
         GreetingService,
+        TrafficWarLifecycle,
         {
           provide: TRAFFICWAR,
           useValue: trafficwar,

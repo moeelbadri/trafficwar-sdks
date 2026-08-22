@@ -3,6 +3,10 @@
 Official, typed Python server SDK for durable event ingestion into
 [TrafficWar](https://trafficwar.tech).
 
+> **Unreleased breaking change:** this README describes the automatic batching
+> API planned after 1.0.0. No package version containing this change has been
+> published yet.
+
 ## Install
 
 ```bash
@@ -16,39 +20,83 @@ Python 3.9 or newer and HTTPX `>=0.28.1,<1` are supported.
 ```python
 from trafficwar import Event, TrafficWar
 
-event: Event = {
-    "event": "checkout",
-    "latency_ms": 184.7,
-    "status_code": 200,
-    "distinct_id": "visitor-42",
-    "properties": {"cart_items": 3, "currency": "EUR"},
-}
+trafficwar = TrafficWar("tw_live_...")
+try:
+    event: Event = {
+        "event": "checkout",
+        "latency_ms": 184.7,
+        "status_code": 200,
+        "source": "checkout-api",
+        "distinct_id": "visitor-42",
+        "properties": {"cart_items": 3, "currency": "EUR"},
+    }
+    trafficwar.capture(event)
+    trafficwar.capture(
+        [
+            {"event": "job.started", "source": "worker"},
+            {"event": "job.finished", "source": "worker", "latency_ms": 42},
+        ]
+    )
+finally:
+    flushed = trafficwar.close()
 
-with TrafficWar("tw_live_...") as trafficwar:
-    result = trafficwar.capture(event)
-
-print(result.accepted, result.ingest_id)
+print(flushed.accepted, len(flushed.batches))
 ```
 
-Reuse one client across calls. It owns a connection pool and is safe to use as
-a context manager.
+Synchronous `capture` accepts one mapping or a non-empty iterable of mappings.
+It validates, snapshots, and enqueues the input, then returns `None` without
+waiting for the network. Reuse one thread-safe client across calls. It is also
+a context manager; leaving the context calls `close()`.
 
 ## Asynchronous client
 
 ```python
 from trafficwar import AsyncTrafficWar
 
-async with AsyncTrafficWar("tw_live_...") as trafficwar:
-    result = await trafficwar.capture_batch(
+trafficwar = AsyncTrafficWar("tw_live_...")
+try:
+    await trafficwar.capture({"event": "page_view", "path": "/pricing", "source": "fastapi"})
+    await trafficwar.capture(
         [
-            {"event": "page_view", "path": "/pricing"},
-            {"event": "signup", "latency_ms": 92},
+            {"event": "signup.started", "source": "fastapi"},
+            {"event": "signup.finished", "source": "fastapi", "latency_ms": 92},
         ]
     )
+finally:
+    flushed = await trafficwar.aclose()
+
+print(flushed.accepted, len(flushed.batches))
 ```
 
-A batch must contain 1–10,000 events. The SDK sends the server API's required
-bare JSON array rather than wrapping it in an object.
+Async `await capture(...)` accepts the same single-event or non-empty iterable
+input and waits only for validation and enqueueing. It does not wait for an
+HTTP request or return an `IngestResult`. `AsyncTrafficWar` can also be used as
+an async context manager.
+
+## Automatic batching
+
+The first queued event starts a one-second timer. A client flushes when that
+timer expires or as soon as 10,000 events are pending. TrafficWar's fixed
+server batch maximum is 10,000, so a larger queued iterable is split across
+requests.
+
+Every request is a bare JSON array sent to `/v1/server/batch`, including a
+single-event capture. The queue holds at most 100,000 unacknowledged events by
+default. Configure the timing and bound with `flush_interval` and
+`max_queue_size`:
+
+```python
+client = TrafficWar(
+    "tw_live_...",
+    flush_interval=1.0,
+    max_queue_size=100_000,
+)
+```
+
+If enqueueing would exceed the configured queue limit, `capture` raises
+`ValidationError` and enqueues none of that call. Iterables are eagerly
+consumed so callers can safely reuse or mutate their original objects after
+`capture` returns.
 
 ## Event fields
 
@@ -67,8 +115,12 @@ optional fields:
 - `operation_type`
 - `status_code` (0–65535)
 
-The service derives the account and service from the API key. Do not put
-`user_id` or `service` in an event. The SDK does not generate `event_id`.
+The SDK generates a process-monotonic RFC 9562 UUIDv7 `event_id` for each event
+that omits one. A caller may override it with any valid UUID.
+
+Use `source` for caller-selected origin or runtime metadata such as
+`checkout-api`, `django`, or `worker`. `span_kind` is separate, optional
+trace-specific role metadata; it does not replace `source`.
 
 Caller-owned mappings are never modified. JSON is serialized once in compact,
 deterministic UTF-8 form. Automatic gzip starts at 1 KiB; configure
@@ -81,34 +133,57 @@ client = TrafficWar(
     max_retries=3,
     compression="auto",
     compression_threshold=1024,
+    flush_interval=1.0,
+    max_queue_size=100_000,
+    on_error=lambda error: print(f"automatic TrafficWar flush failed: {error}"),
 )
 ```
 
 The decoded JSON limit is 8 MiB and the transmitted-body limit is 2 MiB.
 
-## Retries and idempotency
+## Flush results and shutdown
 
-Every SDK call gets a fresh `Idempotency-Key`. The SDK retries transport and
-timeout failures plus HTTP 408, 425, 500, 502, 503, and 504 responses. A retry
-uses the exact same serialized/compressed bytes and key, with exponential
-jitter and `Retry-After` support. The default is three retries after the
-initial attempt. To keep calls bounded, a retryable response that asks for
-more than 60 seconds is surfaced immediately as `ServerError` instead of
-sleeping.
-
-Supply your own key when coordinating retries outside the SDK:
+Call `flush()` when an application needs an acknowledgement before continuing:
 
 ```python
-result = client.capture(
-    {"event": "order_paid", "event_id": "evt_123"},
-    idempotency_key="order-123-paid-v1",
-)
+client.capture({"event": "deployment.finished", "source": "release-worker"})
+result = client.flush()
+
+print(result.accepted)
+for batch in result.batches:
+    print(batch.ingest_id, batch.accepted, batch.idempotency_key)
 ```
 
-Keys must be 1–256 visible ASCII characters. They are scoped to the service,
-body-sensitive, and path-sensitive, and are retained by TrafficWar for about
-five minutes. Reusing a key for a different request raises `ConflictError`.
-HTTP 409 and quota HTTP 429 responses are never retried.
+`flush()` and `await flush()` return an aggregate `FlushResult`: `accepted` is
+the number of events drained by that operation, and `batches` contains one
+`IngestResult` per HTTP request.
+
+Always call synchronous `close()` or await async `aclose()` during graceful
+application shutdown. Close already stops automatic work and flushes every
+queued event, so a separate shutdown flush is unnecessary. The synchronous
+worker is a daemon thread, and the async client owns a background task; exiting
+without closing can lose pending events or leak task/resource warnings.
+
+`capture_batch(events)` remains as a deprecated compatibility alias. New code
+passes the non-empty iterable directly to `capture(events)`.
+
+## Retries and errors
+
+The SDK prepares each HTTP batch once. Its compact JSON bytes, optional gzip
+bytes, generated event IDs, and internal idempotency key stay stable across
+bounded retries. Idempotency is an internal delivery detail rather than part of
+the `capture` API.
+
+The SDK retries transport and timeout failures plus HTTP 408, 425, 500, 502,
+503, and 504 responses with exponential jitter and `Retry-After` support. The
+default is three retries after the initial attempt. A retryable response asking
+for more than 60 seconds is surfaced immediately as `ServerError`. HTTP 409 and
+quota HTTP 429 responses are never retried.
+
+An automatic delivery failure invokes optional `on_error`. The callback is
+observational: the failed prepared batch remains queued. A later automatic
+attempt, `flush`, `close`, or `aclose` retries that same batch, and an explicit
+flush or close surfaces an error if delivery still fails.
 
 ## Errors
 
@@ -128,8 +203,10 @@ also exposes `period`, `used`, `limit`, `remaining_events`, `batch_events`, and
 ```python
 from trafficwar import RateLimitError
 
+client.capture({"event": "job.failed", "status_code": 500})
+
 try:
-    client.capture_batch(events)
+    client.flush()
 except RateLimitError as exc:
     print(exc.period, exc.remaining_events, exc.retry_after)
 ```
@@ -148,7 +225,7 @@ trafficwar = TrafficWar("tw_live_...", http_client=http)
 try:
     trafficwar.capture({"event": "job_finished"})
 finally:
-    trafficwar.close()  # leaves `http` open
+    trafficwar.close()  # flushes the event and leaves `http` open
     http.close()
 ```
 

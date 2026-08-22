@@ -1,6 +1,9 @@
+from __future__ import annotations
+
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Literal, Optional, TypedDict, Union
+from typing import Any, Callable, Literal, Optional, TypedDict, Union
 
 JSONPrimitive = Union[str, int, float, bool, None]
 JSONValue = Union[JSONPrimitive, list["JSONValue"], dict[str, "JSONValue"]]
@@ -47,9 +50,22 @@ class IngestResult:
 
 
 @dataclass(frozen=True)
+class FlushResult:
+    """The aggregate acknowledgement for one queue drain."""
+
+    accepted: int
+    batches: tuple[IngestResult, ...]
+
+
+@dataclass(frozen=True)
 class PreparedRequest:
     path: str
     body: bytes
     idempotency_key: str
     content_encoding: Optional[str]
     expected_accepted: int
+    events: tuple[dict[str, Any], ...]
+
+
+EventInput = Union[Mapping[str, Any], Iterable[Mapping[str, Any]]]
+ErrorHandler = Callable[[Exception], None]

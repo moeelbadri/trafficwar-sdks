@@ -20,6 +20,9 @@ async function main(): Promise<void> {
   const trafficwar = new TrafficWar({
     apiKey,
     ...(baseUrl ? { baseUrl } : {}),
+    onError(error) {
+      console.error("TrafficWar automatic flush failed", error);
+    },
   });
   const example = createApp(trafficwar);
   const port = readPort();
@@ -27,7 +30,11 @@ async function main(): Promise<void> {
   try {
     await example.app.listen({ hostname: "0.0.0.0", port });
   } catch (error) {
-    example.close();
+    try {
+      await trafficwar.close();
+    } finally {
+      example.close();
+    }
     throw error;
   }
 
@@ -44,7 +51,11 @@ async function main(): Promise<void> {
     try {
       await example.app.stop();
     } finally {
-      example.close();
+      try {
+        await trafficwar.close();
+      } finally {
+        example.close();
+      }
     }
   };
 

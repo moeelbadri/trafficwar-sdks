@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import atexit
+import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
 from threading import RLock
@@ -12,6 +13,11 @@ from trafficwar import TrafficWar
 _lock = RLock()
 _client: TrafficWar | None = None
 _owns_client = False
+_logger = logging.getLogger(__name__)
+
+
+def _report_background_error(error: Exception) -> None:
+    _logger.error("TrafficWar automatic flush failed: %s", error)
 
 
 def get_trafficwar_client() -> TrafficWar:
@@ -28,6 +34,7 @@ def get_trafficwar_client() -> TrafficWar:
                 timeout=settings.TRAFFICWAR_TIMEOUT,
                 max_retries=settings.TRAFFICWAR_MAX_RETRIES,
                 compression="auto",
+                on_error=_report_background_error,
             )
             _owns_client = True
         return _client
@@ -52,16 +59,18 @@ def override_trafficwar_client(client: TrafficWar) -> Iterator[None]:
 
 
 def close_owned_trafficwar_client() -> None:
-    """Close the lazily-created client; leave injected clients caller-owned."""
+    """Flush and close the app-owned client; leave injected clients caller-owned."""
 
     global _client, _owns_client
     with _lock:
         if _client is None or not _owns_client:
             return
         client = _client
-        _client = None
-        _owns_client = False
     client.close()
+    with _lock:
+        if _client is client and _owns_client:
+            _client = None
+            _owns_client = False
 
 
 atexit.register(close_owned_trafficwar_client)

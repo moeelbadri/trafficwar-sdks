@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { gzip } from "node:zlib";
 
 import {
@@ -10,23 +9,26 @@ import {
 } from "./errors";
 import type {
   CompressionMode,
+  FlushResult,
   IngestResult,
   TrafficWarEvent,
+  TrafficWarErrorHandler,
   TrafficWarFetch,
   TrafficWarOptions,
-  TrafficWarRequestOptions,
 } from "./types";
 import {
-  assertUniqueEventIds,
   normalizeEvent,
   serializeJson,
-  validateIdempotencyKey,
+  type NormalizedEvent,
 } from "./validation";
+import { uuidv7 } from "./uuidv7";
 import packageMetadata from "../package.json" with { type: "json" };
 
 export const TRAFFICWAR_DEFAULT_BASE_URL = "https://ingest.trafficwar.tech";
 export const TRAFFICWAR_DEFAULT_TIMEOUT_MS = 30_000;
 export const TRAFFICWAR_DEFAULT_MAX_RETRIES = 3;
+export const TRAFFICWAR_DEFAULT_FLUSH_INTERVAL_MS = 1_000;
+export const TRAFFICWAR_DEFAULT_MAX_QUEUE_SIZE = 100_000;
 export const TRAFFICWAR_MAX_BATCH_SIZE = 10_000;
 export const TRAFFICWAR_MAX_COMPRESSED_BODY_BYTES = 2 * 1024 * 1024;
 export const TRAFFICWAR_MAX_DECODED_BODY_BYTES = 8 * 1024 * 1024;
@@ -44,15 +46,15 @@ interface PreparedRequest {
   contentEncoding: "gzip" | undefined;
 }
 
+interface PreparedBatch extends PreparedRequest {
+  events: readonly NormalizedEvent[];
+  idempotencyKey: string;
+}
+
 interface ParsedBody {
   text: string;
   value: unknown;
   isJson: boolean;
-}
-
-interface RequestIdentity {
-  idempotencyKey: string;
-  signal: AbortSignal | undefined;
 }
 
 interface AttemptResult {
@@ -67,6 +69,15 @@ class AttemptTransportFailure {
   constructor(cause: unknown, timedOut: boolean) {
     this.cause = cause;
     this.timedOut = timedOut;
+  }
+}
+
+class PreparedRequestTooLarge extends Error {
+  readonly limit: "decoded" | "wire";
+
+  constructor(limit: "decoded" | "wire") {
+    super(limit);
+    this.limit = limit;
   }
 }
 
@@ -168,43 +179,6 @@ function validateCompression(value: unknown): CompressionMode {
     );
   }
   return actual;
-}
-
-function isAbortSignal(value: unknown): value is AbortSignal {
-  return (
-    value !== null &&
-    typeof value === "object" &&
-    typeof (value as AbortSignal).aborted === "boolean" &&
-    typeof (value as AbortSignal).addEventListener === "function" &&
-    typeof (value as AbortSignal).removeEventListener === "function"
-  );
-}
-
-function requestIdentity(
-  options: TrafficWarRequestOptions | undefined,
-): RequestIdentity {
-  if (
-    options !== undefined &&
-    (options === null || typeof options !== "object" || Array.isArray(options))
-  ) {
-    throw new TrafficWarValidationError(
-      "request options must be an object",
-      { path: "options" },
-    );
-  }
-
-  const idempotencyKey =
-    options?.idempotencyKey === undefined
-      ? randomUUID()
-      : validateIdempotencyKey(options.idempotencyKey);
-  const signal = options?.signal;
-  if (signal !== undefined && !isAbortSignal(signal)) {
-    throw new TrafficWarValidationError(
-      "signal must be an AbortSignal",
-      { path: "options.signal", idempotencyKey },
-    );
-  }
-  return { idempotencyKey, signal };
 }
 
 function parseBody(text: string): ParsedBody {
@@ -377,10 +351,7 @@ async function prepareRequest(
 ): Promise<PreparedRequest> {
   const decoded = serializeJson(payload, idempotencyKey);
   if (decoded.byteLength > TRAFFICWAR_MAX_DECODED_BODY_BYTES) {
-    throw new TrafficWarValidationError(
-      `Decoded request body exceeds ${TRAFFICWAR_MAX_DECODED_BODY_BYTES} bytes`,
-      { path: "body", idempotencyKey },
-    );
+    throw new PreparedRequestTooLarge("decoded");
   }
 
   const useGzip =
@@ -399,10 +370,7 @@ async function prepareRequest(
   }
 
   if (body.byteLength > TRAFFICWAR_MAX_COMPRESSED_BODY_BYTES) {
-    throw new TrafficWarValidationError(
-      `Request body exceeds the ${TRAFFICWAR_MAX_COMPRESSED_BODY_BYTES}-byte wire limit`,
-      { path: "body", idempotencyKey },
-    );
+    throw new PreparedRequestTooLarge("wire");
   }
 
   return {
@@ -513,9 +481,24 @@ export class TrafficWar {
   readonly maxRetries: number;
   readonly compression: CompressionMode;
   readonly compressionThresholdBytes: number;
+  readonly flushIntervalMs: number;
+  readonly maxQueueSize: number;
 
   readonly #apiKey: string;
   readonly #fetch: TrafficWarFetch;
+  readonly #onError: TrafficWarErrorHandler | undefined;
+
+  readonly #queue: NormalizedEvent[] = [];
+  readonly #pendingEventIds = new Set<string>();
+  #pendingCount = 0;
+  #preparedBatch: PreparedBatch | undefined;
+  #timer: ReturnType<typeof setTimeout> | undefined;
+  #drainPromise: Promise<FlushResult> | undefined;
+  #backgroundPromise: Promise<FlushResult> | undefined;
+  #backgroundScheduled = false;
+  #closePromise: Promise<FlushResult> | undefined;
+  #closing = false;
+  #closed = false;
 
   constructor(options: TrafficWarOptions) {
     if (
@@ -553,10 +536,30 @@ export class TrafficWar {
       0,
       TRAFFICWAR_MAX_DECODED_BODY_BYTES,
     );
+    this.flushIntervalMs = validateIntegerOption(
+      "flushIntervalMs",
+      options.flushIntervalMs,
+      TRAFFICWAR_DEFAULT_FLUSH_INTERVAL_MS,
+      1,
+      MAX_TIMER_MS,
+    );
+    this.maxQueueSize = validateIntegerOption(
+      "maxQueueSize",
+      options.maxQueueSize,
+      TRAFFICWAR_DEFAULT_MAX_QUEUE_SIZE,
+      1,
+      Number.MAX_SAFE_INTEGER,
+    );
     if (options.fetch !== undefined && typeof options.fetch !== "function") {
       throw new TrafficWarValidationError(
         "fetch must be a function",
         { path: "options.fetch" },
+      );
+    }
+    if (options.onError !== undefined && typeof options.onError !== "function") {
+      throw new TrafficWarValidationError(
+        "onError must be a function",
+        { path: "options.onError" },
       );
     }
     this.#fetch =
@@ -564,103 +567,344 @@ export class TrafficWar {
       ((input, init) => {
         return globalThis.fetch(input, init);
       });
+    this.#onError = options.onError;
   }
 
-  async capture(
-    event: TrafficWarEvent,
-    options?: TrafficWarRequestOptions,
-  ): Promise<IngestResult> {
-    const identity = requestIdentity(options);
-    const normalized = normalizeEvent(
-      event,
-      "event",
-      identity.idempotencyKey,
-    );
-    return this.#send(
-      "/v1/server/capture",
-      normalized,
-      1,
-      identity,
-    );
+  capture(
+    eventOrEvents: TrafficWarEvent | readonly TrafficWarEvent[],
+  ): void {
+    if (this.#closed) {
+      throw new TrafficWarValidationError(
+        "TrafficWar client is closed",
+        { path: "client" },
+      );
+    }
+    if (this.#closing) {
+      throw new TrafficWarValidationError(
+        "TrafficWar client is closing",
+        { path: "client" },
+      );
+    }
+
+    const isBatch = Array.isArray(eventOrEvents);
+    if (isBatch && eventOrEvents.length === 0) {
+      throw new TrafficWarValidationError(
+        "events must be a non-empty array",
+        { path: "events" },
+      );
+    }
+    const events = isBatch ? eventOrEvents : [eventOrEvents];
+    if (isBatch) {
+      for (let index = 0; index < events.length; index += 1) {
+        if (!(index in events)) {
+          const path = `events[${index}]`;
+          throw new TrafficWarValidationError(
+            `${path} is missing; sparse event arrays are not supported`,
+            { path },
+          );
+        }
+      }
+    }
+    if (events.length > this.maxQueueSize - this.#pendingCount) {
+      throw new TrafficWarValidationError(
+        `TrafficWar queue cannot exceed ${this.maxQueueSize} events`,
+        { path: "queue" },
+      );
+    }
+
+    const normalized: NormalizedEvent[] = [];
+    for (let index = 0; index < events.length; index += 1) {
+      const path = isBatch ? `events[${index}]` : "event";
+      normalized.push(normalizeEvent(events[index]!, path));
+    }
+
+    for (const event of normalized) {
+      if (!Object.hasOwn(event, "event_id")) {
+        event.event_id = uuidv7();
+      }
+    }
+
+    const incomingEventIds = new Set<string>();
+    for (let index = 0; index < normalized.length; index += 1) {
+      const eventId = normalized[index]!.event_id as string;
+      if (
+        incomingEventIds.has(eventId) ||
+        this.#pendingEventIds.has(eventId)
+      ) {
+        const path = isBatch
+          ? `events[${index}].event_id`
+          : "event.event_id";
+        throw new TrafficWarValidationError(
+          `${path} duplicates an unacknowledged event_id`,
+          { path },
+        );
+      }
+      incomingEventIds.add(eventId);
+    }
+
+    for (const event of normalized) {
+      this.#queue.push(event);
+      this.#pendingEventIds.add(event.event_id as string);
+    }
+    this.#pendingCount += normalized.length;
+    if (this.#pendingCount >= TRAFFICWAR_MAX_BATCH_SIZE) {
+      this.#clearTimer();
+      this.#startBackgroundDrain();
+    } else {
+      this.#ensureTimer();
+    }
   }
 
-  async captureBatch(
-    events: readonly TrafficWarEvent[],
-    options?: TrafficWarRequestOptions,
-  ): Promise<IngestResult> {
-    const identity = requestIdentity(options);
+  /**
+   * @deprecated Pass the array directly to capture().
+   */
+  captureBatch(events: readonly TrafficWarEvent[]): void {
     if (!Array.isArray(events) || events.length === 0) {
       throw new TrafficWarValidationError(
         "events must be a non-empty array",
-        { path: "events", idempotencyKey: identity.idempotencyKey },
+        { path: "events" },
       );
     }
-    if (events.length > TRAFFICWAR_MAX_BATCH_SIZE) {
-      throw new TrafficWarValidationError(
-        `events must contain at most ${TRAFFICWAR_MAX_BATCH_SIZE} events`,
-        { path: "events", idempotencyKey: identity.idempotencyKey },
-      );
+    this.capture(events);
+  }
+
+  flush(): Promise<FlushResult> {
+    if (this.#closePromise) {
+      return this.#closePromise;
+    }
+    this.#clearTimer();
+    return this.#startDrain();
+  }
+
+  close(): Promise<FlushResult> {
+    if (this.#closed) {
+      return Promise.resolve({ accepted: 0, batches: [] });
+    }
+    if (this.#closePromise) {
+      return this.#closePromise;
     }
 
-    const normalized = events.map((event, index) =>
-      normalizeEvent(
-        event,
-        `events[${index}]`,
-        identity.idempotencyKey,
-      ),
-    );
-    assertUniqueEventIds(normalized, identity.idempotencyKey);
-    return this.#send(
-      "/v1/server/batch",
-      normalized,
-      normalized.length,
-      identity,
+    this.#clearTimer();
+    this.#closing = true;
+    let closing!: Promise<FlushResult>;
+    closing = Promise.resolve().then(async () => {
+      const batches: IngestResult[] = [];
+      let accepted = 0;
+      try {
+        do {
+          const result = await this.#startDrain();
+          accepted += result.accepted;
+          for (const batch of result.batches) {
+            batches.push(batch);
+          }
+        } while (this.#pendingCount > 0);
+
+        this.#clearTimer();
+        this.#closed = true;
+        return { accepted, batches };
+      } finally {
+        if (this.#closePromise === closing) {
+          this.#closePromise = undefined;
+        }
+        this.#closing = false;
+        if (!this.#closed && this.#pendingCount > 0) {
+          this.#ensureTimer();
+        }
+      }
+    });
+    this.#closePromise = closing;
+    return closing;
+  }
+
+  #ensureTimer(): void {
+    if (
+      this.#closed ||
+      this.#closing ||
+      this.#pendingCount === 0 ||
+      this.#timer !== undefined
+    ) {
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      if (this.#timer === timer) {
+        this.#timer = undefined;
+      }
+      this.#startBackgroundDrain();
+    }, this.flushIntervalMs);
+    timer.unref();
+    this.#timer = timer;
+  }
+
+  #clearTimer(): void {
+    if (this.#timer !== undefined) {
+      clearTimeout(this.#timer);
+      this.#timer = undefined;
+    }
+  }
+
+  #startBackgroundDrain(): void {
+    if (this.#backgroundScheduled) {
+      return;
+    }
+    this.#backgroundScheduled = true;
+    queueMicrotask(() => {
+      this.#backgroundScheduled = false;
+      if (!this.#closed && this.#pendingCount > 0) {
+        this.#observeBackgroundDrain(this.#startDrain());
+      }
+    });
+  }
+
+  #observeBackgroundDrain(drain: Promise<FlushResult>): void {
+    if (this.#backgroundPromise === drain) {
+      return;
+    }
+
+    this.#backgroundPromise = drain;
+    void drain.then(
+      () => {
+        if (this.#backgroundPromise === drain) {
+          this.#backgroundPromise = undefined;
+        }
+      },
+      (error: unknown) => {
+        if (this.#backgroundPromise === drain) {
+          this.#backgroundPromise = undefined;
+        }
+        if (this.#onError) {
+          try {
+            const handled = this.#onError(error);
+            void Promise.resolve(handled).catch(() => undefined);
+          } catch {
+            // Background error handlers are advisory and must never destabilize
+            // the process, whether they throw synchronously or reject.
+          }
+        }
+      },
     );
   }
 
+  #startDrain(): Promise<FlushResult> {
+    if (this.#drainPromise) {
+      return this.#drainPromise;
+    }
+
+    let drain!: Promise<FlushResult>;
+    drain = (async () => {
+      try {
+        return await this.#drain();
+      } finally {
+        if (this.#drainPromise === drain) {
+          this.#drainPromise = undefined;
+        }
+        if (this.#pendingCount === 0) {
+          this.#clearTimer();
+        } else if (!this.#closed) {
+          this.#ensureTimer();
+        }
+      }
+    })();
+    this.#drainPromise = drain;
+    return drain;
+  }
+
+  async #drain(): Promise<FlushResult> {
+    const batches: IngestResult[] = [];
+    let accepted = 0;
+
+    while (this.#pendingCount > 0) {
+      const batch =
+        this.#preparedBatch ?? (await this.#prepareNextBatch());
+      this.#preparedBatch = batch;
+
+      const result = await this.#send(batch);
+      for (const event of batch.events) {
+        this.#pendingEventIds.delete(event.event_id as string);
+      }
+      this.#preparedBatch = undefined;
+      this.#pendingCount -= batch.events.length;
+      accepted += result.accepted;
+      batches.push(result);
+    }
+
+    return { accepted, batches };
+  }
+
+  async #prepareNextBatch(): Promise<PreparedBatch> {
+    let count = Math.min(this.#queue.length, TRAFFICWAR_MAX_BATCH_SIZE);
+    if (count === 0) {
+      throw new Error("TrafficWar queue state is inconsistent");
+    }
+
+    while (true) {
+      const events = this.#queue.slice(0, count);
+      const idempotencyKey = uuidv7();
+      try {
+        const prepared = await prepareRequest(
+          events,
+          idempotencyKey,
+          this.compression,
+          this.compressionThresholdBytes,
+        );
+        this.#queue.splice(0, count);
+        return { ...prepared, events, idempotencyKey };
+      } catch (error) {
+        if (!(error instanceof PreparedRequestTooLarge)) {
+          throw error;
+        }
+        if (count > 1) {
+          count = Math.max(1, Math.floor(count / 2));
+          continue;
+        }
+
+        const message =
+          error.limit === "decoded"
+            ? `Decoded request body exceeds ${TRAFFICWAR_MAX_DECODED_BODY_BYTES} bytes`
+            : `Request body exceeds the ${TRAFFICWAR_MAX_COMPRESSED_BODY_BYTES}-byte wire limit`;
+        throw new TrafficWarValidationError(message, {
+          path: "body",
+          idempotencyKey,
+        });
+      }
+    }
+  }
+
   async #send(
-    path: string,
-    payload: unknown,
-    expectedCount: number,
-    identity: RequestIdentity,
+    batch: PreparedBatch,
+    signal?: AbortSignal,
   ): Promise<IngestResult> {
-    const prepared = await prepareRequest(
-      payload,
-      identity.idempotencyKey,
-      this.compression,
-      this.compressionThresholdBytes,
-    );
     const headers: Record<string, string> = {
       accept: "application/json",
       authorization: `Bearer ${this.#apiKey}`,
       "content-type": "application/json",
-      "idempotency-key": identity.idempotencyKey,
+      "idempotency-key": batch.idempotencyKey,
       "user-agent": `@trafficwar/node/${SDK_VERSION}`,
       "x-trafficwar-sdk": `node/${SDK_VERSION}`,
     };
-    if (prepared.contentEncoding) {
-      headers["content-encoding"] = prepared.contentEncoding;
+    if (batch.contentEncoding) {
+      headers["content-encoding"] = batch.contentEncoding;
     }
 
-    const url = `${this.baseUrl}${path}`;
+    const url = `${this.baseUrl}/v1/server/batch`;
     const init: RequestInit = {
       method: "POST",
       headers,
-      body: prepared.body,
+      body: batch.body,
       redirect: "error",
     };
     let sawTimeout = false;
 
     for (let attempt = 0; attempt <= this.maxRetries; attempt += 1) {
-      if (identity.signal?.aborted) {
+      if (signal?.aborted) {
         throw new TrafficWarConnectionError(
           "TrafficWar request was aborted",
           {
             attempts: attempt,
             aborted: true,
             timedOut: sawTimeout,
-            idempotencyKey: identity.idempotencyKey,
-            cause: identity.signal.reason,
+            idempotencyKey: batch.idempotencyKey,
+            cause: signal.reason,
           },
         );
       }
@@ -671,7 +915,7 @@ export class TrafficWar {
           this.#fetch,
           url,
           init,
-          identity.signal,
+          signal,
           this.timeoutMs,
         );
       } catch (error) {
@@ -681,15 +925,15 @@ export class TrafficWar {
             : new AttemptTransportFailure(error, false);
         sawTimeout ||= failure.timedOut;
 
-        if (identity.signal?.aborted) {
+        if (signal?.aborted) {
           throw new TrafficWarConnectionError(
             "TrafficWar request was aborted",
             {
               attempts: attempt + 1,
               aborted: true,
               timedOut: sawTimeout,
-              idempotencyKey: identity.idempotencyKey,
-              cause: identity.signal.reason ?? failure.cause,
+              idempotencyKey: batch.idempotencyKey,
+              cause: signal.reason ?? failure.cause,
             },
           );
         }
@@ -702,14 +946,14 @@ export class TrafficWar {
             {
               attempts: attempt + 1,
               timedOut: sawTimeout,
-              idempotencyKey: identity.idempotencyKey,
+              idempotencyKey: batch.idempotencyKey,
               cause: failure.cause,
             },
           );
         }
 
         try {
-          await sleep(retryDelayMs(attempt, undefined), identity.signal);
+          await sleep(retryDelayMs(attempt, undefined), signal);
         } catch (cause) {
           throw new TrafficWarConnectionError(
             "TrafficWar request was aborted",
@@ -717,7 +961,7 @@ export class TrafficWar {
               attempts: attempt + 1,
               aborted: true,
               timedOut: sawTimeout,
-              idempotencyKey: identity.idempotencyKey,
+              idempotencyKey: batch.idempotencyKey,
               cause,
             },
           );
@@ -730,8 +974,8 @@ export class TrafficWar {
         return parseSuccess(
           result.response,
           parsed,
-          expectedCount,
-          identity.idempotencyKey,
+          batch.events.length,
+          batch.idempotencyKey,
         );
       }
 
@@ -745,7 +989,7 @@ export class TrafficWar {
           retryAfter <= MAX_RETRY_AFTER_SECONDS
         ) {
           try {
-            await sleep(retryDelayMs(attempt, retryAfter), identity.signal);
+            await sleep(retryDelayMs(attempt, retryAfter), signal);
           } catch (cause) {
             throw new TrafficWarConnectionError(
               "TrafficWar request was aborted",
@@ -753,7 +997,7 @@ export class TrafficWar {
                 attempts: attempt + 1,
                 aborted: true,
                 timedOut: sawTimeout,
-                idempotencyKey: identity.idempotencyKey,
+                idempotencyKey: batch.idempotencyKey,
                 cause,
               },
             );
@@ -765,7 +1009,7 @@ export class TrafficWar {
       throw buildApiError(
         result.response,
         parsed,
-        identity.idempotencyKey,
+        batch.idempotencyKey,
       );
     }
 
@@ -774,7 +1018,7 @@ export class TrafficWar {
     throw new TrafficWarConnectionError("Unable to reach TrafficWar", {
       attempts: this.maxRetries + 1,
       timedOut: sawTimeout,
-      idempotencyKey: identity.idempotencyKey,
+      idempotencyKey: batch.idempotencyKey,
     });
   }
 }

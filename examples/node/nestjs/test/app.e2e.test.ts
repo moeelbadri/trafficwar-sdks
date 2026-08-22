@@ -20,10 +20,11 @@ function createTestClient(): {
   events: CapturedEvent[];
 } {
   const events: CapturedEvent[] = [];
+  let requests = 0;
   const fakeFetch: TrafficWarFetch = async (input, init) => {
     const url = new URL(input);
     assert.equal(url.origin, "https://ingest.test");
-    assert.equal(url.pathname, "/v1/server/capture");
+    assert.equal(url.pathname, "/v1/server/batch");
     assert.equal(init.method, "POST");
 
     const headers = new Headers(init.headers);
@@ -36,16 +37,26 @@ function createTestClient(): {
     const payload: unknown = JSON.parse(
       Buffer.from(init.body).toString("utf8"),
     );
-    assert.equal(typeof payload, "object");
-    assert.notEqual(payload, null);
-    assert.equal(Array.isArray(payload), false);
-    events.push(payload as CapturedEvent);
+    assert.ok(Array.isArray(payload));
+    assert.ok(payload.length > 0);
+    for (const item of payload) {
+      assert.equal(typeof item, "object");
+      assert.notEqual(item, null);
+      assert.equal(Array.isArray(item), false);
+      const event = item as CapturedEvent;
+      assert.match(
+        String(event.event_id),
+        /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+      );
+      events.push(event);
+    }
+    requests += 1;
 
     return new Response(
       JSON.stringify({
         status: "ok",
-        accepted: 1,
-        ingest_id: `test-ingest-${events.length}`,
+        accepted: payload.length,
+        ingest_id: `test-ingest-${requests}`,
       }),
       {
         status: 200,
@@ -62,6 +73,7 @@ function createTestClient(): {
       timeoutMs: 1_000,
       maxRetries: 0,
       compression: "none",
+      flushIntervalMs: 60_000,
     }),
     events,
   };
@@ -101,6 +113,9 @@ test("queries SQLite and captures successful and missing greetings", async () =>
       message: "Hello, Ada!",
     });
 
+    const successFlush = await trafficwar.flush();
+    assert.equal(successFlush.accepted, 1);
+    assert.equal(successFlush.batches.length, 1);
     assert.equal(events.length, 1);
     const success = events[0]!;
     assertCommonEvent(success, 200);
@@ -121,6 +136,9 @@ test("queries SQLite and captures successful and missing greetings", async () =>
       statusCode: 404,
     });
 
+    const missingFlush = await trafficwar.flush();
+    assert.equal(missingFlush.accepted, 1);
+    assert.equal(missingFlush.batches.length, 1);
     assert.equal(events.length, 2);
     const missing = events[1]!;
     assertCommonEvent(missing, 404);

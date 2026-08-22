@@ -67,18 +67,22 @@ assert.equal(typeof TrafficWarError, "function");
   );
   writeFileSync(
     join(consumerRoot, "esm.mts"),
-    `import { TrafficWar, type TrafficWarEvent } from "@trafficwar/node";
+    `import { TrafficWar, type FlushResult, type TrafficWarEvent } from "@trafficwar/node";
 const event: TrafficWarEvent = { event: "esm.typecheck" };
 const client = new TrafficWar({ apiKey: "test-key" });
-void client.capture(event);
+client.capture([event]);
+const pending: Promise<FlushResult> = client.flush();
+void pending;
 `,
   );
   writeFileSync(
     join(consumerRoot, "cjs.cts"),
-    `import { TrafficWar, type TrafficWarEvent } from "@trafficwar/node";
+    `import { TrafficWar, type FlushResult, type TrafficWarEvent } from "@trafficwar/node";
 const event: TrafficWarEvent = { event: "cjs.typecheck" };
 const client = new TrafficWar({ apiKey: "test-key" });
-void client.capture(event);
+client.capture([event]);
+const pending: Promise<FlushResult> = client.flush();
+void pending;
 `,
   );
 

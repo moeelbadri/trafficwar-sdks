@@ -1,8 +1,9 @@
 # Express 5 example
 
 A small Express 5 API that reads a seeded greeting from Node's built-in
-in-memory SQLite database and awaits a TrafficWar capture before responding.
-It requires Node.js 22.13 or newer for unflagged `node:sqlite`.
+in-memory SQLite database, enqueues a TrafficWar event, and responds without
+waiting for delivery. It requires Node.js 22.13 or newer for unflagged
+`node:sqlite`.
 
 ## Run
 
@@ -42,4 +43,9 @@ npm run check --workspace @trafficwar/example-express
 The test uses the real local `@trafficwar/node` client with an injected fake
 Fetch implementation. It only calls the local Express server and never sends
 traffic to the production ingest service. The HTTP server and SQLite database
-are closed after each run.
+are closed after each run. The test explicitly flushes before assertions and
+checks the bare `/v1/server/batch` array plus the generated UUIDv7 `event_id`.
+
+On `SIGINT` or `SIGTERM`, the entry point first stops the HTTP server, then
+awaits `trafficwar.close()` and closes SQLite. SDK close already flushes the
+queue, so shutdown does not issue a separate flush.

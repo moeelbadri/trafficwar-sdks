@@ -1,8 +1,8 @@
 # NestJS 11 example
 
 A small NestJS 11 API with a module, controller, and service. The service reads
-a seeded greeting from Node's built-in in-memory SQLite database and awaits a
-TrafficWar capture before the controller responds.
+a seeded greeting from Node's built-in in-memory SQLite database, enqueues a
+TrafficWar event, and lets the controller respond without waiting for delivery.
 It requires Node.js 22.13 or newer for unflagged `node:sqlite`.
 
 ## Run
@@ -42,5 +42,11 @@ npm run check --workspace @trafficwar/example-nestjs
 
 The e2e test creates a Nest `TestingModule`, calls it with Supertest, and
 injects a real local `@trafficwar/node` client configured with a fake Fetch
-implementation. It never contacts production. `app.close()` runs the service
-shutdown hook and closes the in-memory SQLite database.
+implementation. It never contacts production. The test explicitly flushes
+before inspecting the bare `/v1/server/batch` arrays and generated UUIDv7 event
+IDs.
+
+`TrafficWarLifecycle` implements Nest's `OnApplicationShutdown` hook and awaits
+`trafficwar.close()`. Thus `app.close()` and enabled process shutdown hooks
+flush and close the SDK exactly once while the service shutdown hook closes
+SQLite; no separate shutdown flush is needed.

@@ -6,10 +6,10 @@ import random
 import re
 import time
 import uuid
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
-from typing import Any, Optional
+from typing import Any, Optional, cast
 from urllib.parse import urlsplit
 
 import httpx
@@ -25,10 +25,15 @@ from ._errors import (
     TrafficWarError,
     ValidationError,
 )
-from ._models import IngestResult, PreparedRequest
+from ._models import ErrorHandler, EventInput, IngestResult, PreparedRequest
+from ._uuidv7 import uuid7
 from ._version import __version__ as SDK_VERSION
 
 DEFAULT_BASE_URL = "https://ingest.trafficwar.tech"
+DEFAULT_TIMEOUT = 30.0
+DEFAULT_MAX_RETRIES = 3
+DEFAULT_FLUSH_INTERVAL = 1.0
+DEFAULT_MAX_QUEUE_SIZE = 100_000
 MAX_BATCH_EVENTS = 10_000
 MAX_ENCODED_BODY_BYTES = 2 * 1024 * 1024
 MAX_DECODED_BODY_BYTES = 8 * 1024 * 1024
@@ -65,6 +70,16 @@ ALLOWED_FIELDS = STRING_FIELDS | {
 }
 SPAN_KINDS = frozenset({"server", "client", "producer", "consumer", "internal"})
 RFC3339_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$")
+UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
+
+
+class _PreparedRequestTooLarge(Exception):
+    def __init__(self, limit: str) -> None:
+        super().__init__(limit)
+        self.limit = limit
 
 
 class BaseTrafficWar:
@@ -75,10 +90,13 @@ class BaseTrafficWar:
         api_key: str,
         *,
         base_url: str = DEFAULT_BASE_URL,
-        timeout: float = 30.0,
-        max_retries: int = 3,
+        timeout: float = DEFAULT_TIMEOUT,
+        max_retries: int = DEFAULT_MAX_RETRIES,
         compression: str = "auto",
         compression_threshold: int = DEFAULT_COMPRESSION_THRESHOLD,
+        flush_interval: float = DEFAULT_FLUSH_INTERVAL,
+        max_queue_size: int = DEFAULT_MAX_QUEUE_SIZE,
+        on_error: Optional[ErrorHandler] = None,
     ) -> None:
         self.api_key = self._validate_api_key(api_key)
         self.base_url = self._validate_base_url(base_url)
@@ -86,6 +104,9 @@ class BaseTrafficWar:
         self.max_retries = self._validate_max_retries(max_retries)
         self.compression = self._validate_compression(compression)
         self.compression_threshold = self._validate_compression_threshold(compression_threshold)
+        self.flush_interval = self._validate_flush_interval(flush_interval)
+        self.max_queue_size = self._validate_max_queue_size(max_queue_size)
+        self._on_error = self._validate_on_error(on_error)
 
     @staticmethod
     def _validate_api_key(api_key: str) -> str:
@@ -143,44 +164,66 @@ class BaseTrafficWar:
             raise ValidationError("compression_threshold must be a non-negative integer")
         return compression_threshold
 
-    def _prepare_capture(
-        self,
-        event: Mapping[str, Any],
-        idempotency_key: Optional[str],
-    ) -> PreparedRequest:
-        normalized = self._normalize_event(event, index=None)
-        return self._prepare(
-            "/v1/server/capture",
-            normalized,
-            expected_accepted=1,
-            idempotency_key=idempotency_key,
-        )
+    @staticmethod
+    def _validate_flush_interval(flush_interval: float) -> float:
+        if not BaseTrafficWar._is_finite_number(flush_interval) or flush_interval <= 0:
+            raise ValidationError("flush_interval must be a finite number greater than zero")
+        return float(flush_interval)
 
-    def _prepare_batch(
+    @staticmethod
+    def _validate_max_queue_size(max_queue_size: int) -> int:
+        if (
+            isinstance(max_queue_size, bool)
+            or not isinstance(max_queue_size, int)
+            or max_queue_size < 1
+        ):
+            raise ValidationError("max_queue_size must be a positive integer")
+        return max_queue_size
+
+    @staticmethod
+    def _validate_on_error(on_error: Optional[ErrorHandler]) -> Optional[ErrorHandler]:
+        if on_error is not None and not callable(on_error):
+            raise ValidationError("on_error must be callable")
+        return on_error
+
+    def _normalize_capture_input(
         self,
-        events: Iterable[Mapping[str, Any]],
-        idempotency_key: Optional[str],
-    ) -> PreparedRequest:
-        if isinstance(events, (str, bytes, bytearray, Mapping)):
-            raise ValidationError("events must be an iterable of event mappings")
+        event_or_events: EventInput,
+        *,
+        force_batch: bool = False,
+    ) -> tuple[dict[str, Any], ...]:
+        is_single = isinstance(event_or_events, Mapping) and not force_batch
+        if is_single:
+            raw_events: Any = (event_or_events,)
+        else:
+            if isinstance(event_or_events, (str, bytes, bytearray, Mapping)):
+                raise ValidationError("events must be a non-empty iterable of event mappings")
+            raw_events = event_or_events
+
         try:
-            iterator = iter(events)
+            iterator = iter(raw_events)
         except TypeError as exc:
-            raise ValidationError("events must be an iterable of event mappings") from exc
+            raise ValidationError("events must be a non-empty iterable of event mappings") from exc
 
         normalized: list[dict[str, Any]] = []
         for index, event in enumerate(iterator):
-            if index >= MAX_BATCH_EVENTS:
-                raise ValidationError(f"batch cannot contain more than {MAX_BATCH_EVENTS} events")
-            normalized.append(self._normalize_event(event, index=index))
+            if index >= self.max_queue_size:
+                raise ValidationError(
+                    f"TrafficWar queue cannot exceed {self.max_queue_size} events"
+                )
+            normalized.append(self._normalize_event(event, index=None if is_single else index))
         if not normalized:
-            raise ValidationError("batch must contain at least one event")
-        return self._prepare(
-            "/v1/server/batch",
-            normalized,
-            expected_accepted=len(normalized),
-            idempotency_key=idempotency_key,
-        )
+            raise ValidationError("events must contain at least one event")
+
+        seen: set[str] = set()
+        for index, event in enumerate(normalized):
+            event_id = cast(str, event["event_id"])
+            if event_id in seen:
+                raise ValidationError(
+                    f"events[{index}].event_id duplicates another event_id in this enqueue"
+                )
+            seen.add(event_id)
+        return tuple(normalized)
 
     def _normalize_event(self, event: Mapping[str, Any], *, index: Optional[int]) -> dict[str, Any]:
         prefix = f"events[{index}]" if index is not None else "event"
@@ -204,6 +247,17 @@ class BaseTrafficWar:
         for field in STRING_FIELDS:
             if field in normalized and not isinstance(normalized[field], str):
                 raise ValidationError(f"{prefix}.{field} must be a string")
+
+        if "event_id" in normalized:
+            event_id = cast(str, normalized["event_id"])
+            try:
+                parsed_event_id = uuid.UUID(event_id)
+            except (AttributeError, ValueError) as exc:
+                raise ValidationError(f"{prefix}.event_id must be a UUID string") from exc
+            if not UUID_RE.fullmatch(event_id) or str(parsed_event_id).lower() != event_id.lower():
+                raise ValidationError(f"{prefix}.event_id must be a UUID string")
+        else:
+            normalized["event_id"] = uuid7()
 
         if "latency_ms" in normalized:
             latency = normalized["latency_ms"]
@@ -231,7 +285,20 @@ class BaseTrafficWar:
             normalized["timestamp"] = self._normalize_timestamp(
                 normalized["timestamp"], prefix=prefix
             )
-        return normalized
+        try:
+            serialized = json.dumps(
+                normalized,
+                allow_nan=False,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+            snapshot = json.loads(serialized)
+        except (TypeError, ValueError, OverflowError, RecursionError) as exc:
+            raise SerializationError(f"event data is not JSON serializable: {exc}") from exc
+        if not isinstance(snapshot, dict):
+            raise SerializationError("event data is not JSON serializable")
+        return cast(dict[str, Any], snapshot)
 
     @staticmethod
     def _normalize_timestamp(value: Any, *, prefix: str) -> Any:
@@ -271,15 +338,44 @@ class BaseTrafficWar:
         except OverflowError:
             return False
 
+    def _prepare_queued_batch(
+        self,
+        queued: Sequence[dict[str, Any]],
+    ) -> PreparedRequest:
+        count = min(len(queued), MAX_BATCH_EVENTS)
+        if count == 0:
+            raise RuntimeError("TrafficWar queue state is inconsistent")
+
+        while True:
+            events = tuple(queued[:count])
+            idempotency_key = uuid7()
+            try:
+                return self._prepare(
+                    "/v1/server/batch",
+                    list(events),
+                    expected_accepted=count,
+                    idempotency_key=idempotency_key,
+                    events=events,
+                )
+            except _PreparedRequestTooLarge as exc:
+                if count > 1:
+                    count = max(1, count // 2)
+                    continue
+                if exc.limit == "decoded":
+                    message = f"decoded JSON body exceeds {MAX_DECODED_BODY_BYTES} bytes"
+                else:
+                    message = f"HTTP request body exceeds {MAX_ENCODED_BODY_BYTES} bytes"
+                raise ValidationError(message, idempotency_key=idempotency_key) from exc
+
     def _prepare(
         self,
         path: str,
         payload: Any,
         *,
         expected_accepted: int,
-        idempotency_key: Optional[str],
+        idempotency_key: str,
+        events: tuple[dict[str, Any], ...],
     ) -> PreparedRequest:
-        key = self._idempotency_key(idempotency_key)
         try:
             decoded = json.dumps(
                 payload,
@@ -292,7 +388,7 @@ class BaseTrafficWar:
             raise SerializationError(f"event data is not JSON serializable: {exc}") from exc
 
         if len(decoded) > MAX_DECODED_BODY_BYTES:
-            raise ValidationError(f"decoded JSON body exceeds {MAX_DECODED_BODY_BYTES} bytes")
+            raise _PreparedRequestTooLarge("decoded")
 
         use_gzip = self.compression == "gzip" or (
             self.compression == "auto"
@@ -302,13 +398,14 @@ class BaseTrafficWar:
         )
         body = self._gzip(decoded) if use_gzip else decoded
         if len(body) > MAX_ENCODED_BODY_BYTES:
-            raise ValidationError(f"HTTP request body exceeds {MAX_ENCODED_BODY_BYTES} bytes")
+            raise _PreparedRequestTooLarge("wire")
         return PreparedRequest(
             path=path,
             body=body,
-            idempotency_key=key,
+            idempotency_key=idempotency_key,
             content_encoding="gzip" if use_gzip else None,
             expected_accepted=expected_accepted,
+            events=events,
         )
 
     @staticmethod
@@ -317,18 +414,6 @@ class BaseTrafficWar:
         with gzip.GzipFile(fileobj=output, mode="wb", filename="", mtime=0) as stream:
             stream.write(data)
         return output.getvalue()
-
-    @staticmethod
-    def _idempotency_key(custom: Optional[str]) -> str:
-        if custom is None:
-            return str(uuid.uuid4())
-        if not isinstance(custom, str):
-            raise ValidationError("idempotency_key must be a string")
-        if not 1 <= len(custom) <= 256:
-            raise ValidationError("idempotency_key must contain 1 to 256 characters")
-        if any(ord(char) < 0x21 or ord(char) > 0x7E for char in custom):
-            raise ValidationError("idempotency_key must contain only visible ASCII characters")
-        return custom
 
     def _url(self, prepared: PreparedRequest) -> str:
         return f"{self.base_url}{prepared.path}"

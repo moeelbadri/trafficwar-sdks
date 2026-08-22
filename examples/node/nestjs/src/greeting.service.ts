@@ -48,14 +48,14 @@ export class GreetingService implements OnModuleDestroy {
     }
   }
 
-  async findGreeting(name: string): Promise<Greeting | undefined> {
+  findGreeting(name: string): Greeting | undefined {
     const requestStartedAt = performance.now();
     const queryStartedAt = performance.now();
     const row = this.#findByName(name);
     const queryLatencyMs = performance.now() - queryStartedAt;
     const statusCode = row ? 200 : 404;
 
-    await this.trafficwar.capture({
+    this.trafficwar.capture({
       event: "hello.request",
       distinct_id: name,
       path: "/hello/:name",
