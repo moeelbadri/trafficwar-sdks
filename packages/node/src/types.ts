@@ -19,6 +19,7 @@ export type SpanKind =
 export interface TrafficWarEvent {
   event: string;
   event_id?: string;
+  /** RFC3339 string, epoch milliseconds, or Date. Defaults to capture time. */
   timestamp?: string | number | Date;
   latency_ms?: number;
   properties?: JsonValue;

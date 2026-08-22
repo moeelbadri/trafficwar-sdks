@@ -216,6 +216,31 @@ describe("TrafficWar event validation", () => {
     await expect(client.flush()).resolves.toMatchObject({ accepted: 1 });
   });
 
+  it("defaults timestamp to capture time when omitted", async () => {
+    const before = Date.now();
+    let sent: Array<Record<string, unknown>> = [];
+    const client = new TrafficWar({
+      apiKey: "tw_default_ts",
+      compression: "none",
+      fetch: async (_url, init) => {
+        sent = bodyEvents(init);
+        return success(init);
+      },
+    });
+    const event = { event: "now" };
+
+    client.capture(event);
+    await client.flush();
+    const after = Date.now();
+
+    expect(event).not.toHaveProperty("timestamp");
+    expect(typeof sent[0]?.timestamp).toBe("string");
+    const parsed = Date.parse(String(sent[0]?.timestamp));
+    expect(Number.isFinite(parsed)).toBe(true);
+    expect(parsed).toBeGreaterThanOrEqual(before);
+    expect(parsed).toBeLessThanOrEqual(after);
+  });
+
   it.each([
     "",
     "not-a-uuid",
