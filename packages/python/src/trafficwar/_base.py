@@ -285,6 +285,10 @@ class BaseTrafficWar:
             normalized["timestamp"] = self._normalize_timestamp(
                 normalized["timestamp"], prefix=prefix
             )
+        else:
+            normalized["timestamp"] = (
+                datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            )
         try:
             serialized = json.dumps(
                 normalized,

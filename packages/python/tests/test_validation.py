@@ -196,6 +196,38 @@ def test_timestamp_validation(timestamp: Any) -> None:
     http.close()
 
 
+def test_missing_timestamp_defaults_to_capture_time() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return success(request)
+
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    client = TrafficWar(
+        "key",
+        compression="none",
+        flush_interval=60,
+        http_client=http,
+    )
+    event = {"event": "x"}
+    before = datetime.now(timezone.utc)
+
+    client.capture(event)  # type: ignore[arg-type]
+    client.flush()
+    after = datetime.now(timezone.utc)
+
+    payload = json.loads(requests[0].content)
+    assert "timestamp" not in event
+    timestamp = payload[0]["timestamp"]
+    assert isinstance(timestamp, str)
+    parsed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+    assert before <= parsed <= after
+
+    client.close()
+    http.close()
+
+
 def test_datetime_is_normalized_and_deeply_snapshotted() -> None:
     requests: list[httpx.Request] = []
 

@@ -105,7 +105,8 @@ optional fields:
 
 - `event_id`
 - `timestamp` (RFC3339 string, epoch milliseconds, or timezone-aware
-  `datetime`; datetimes are normalized to UTC RFC3339)
+  `datetime`; datetimes are normalized to UTC RFC3339; defaults to capture time
+  when omitted)
 - `latency_ms`
 - `properties` (JSON)
 - `user_agent`, `label`, `ip`, `source`, `country`, `city`

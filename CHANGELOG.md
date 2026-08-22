@@ -2,6 +2,11 @@
 
 All notable changes to the TrafficWar server SDKs are documented here.
 
+## 2.1.1 (Node.js) - 2026-08-22
+
+- Default missing event `timestamp` to capture time in the Node.js and Python
+  SDKs.
+
 ## 2.1.0 (Node.js) - 2026-08-22
 
 - Add opt-in safe batch lifecycle logging with `debug: true`.

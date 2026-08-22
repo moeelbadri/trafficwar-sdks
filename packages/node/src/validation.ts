@@ -307,6 +307,8 @@ export function normalizeEvent(
       `${path}.timestamp`,
       idempotencyKey,
     );
+  } else {
+    normalized.timestamp = new Date().toISOString();
   }
 
   if (

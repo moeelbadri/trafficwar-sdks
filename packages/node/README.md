@@ -26,7 +26,6 @@ const trafficwar = new TrafficWar({
 
 trafficwar.capture({
   event: "checkout.completed",
-  timestamp: new Date(),
   latency_ms: 184.2,
   status_code: 200,
   source: "checkout-api",
@@ -48,7 +47,8 @@ enqueues the input synchronously, then returns `void`; it does not return an
 
 `Date` timestamps are serialized as RFC3339 without changing the caller's
 object. String timestamps must be RFC3339; numeric timestamps are integer epoch
-milliseconds.
+milliseconds. If `timestamp` is omitted, the SDK sets it to the current time at
+capture.
 
 ## Automatic batching
 
