@@ -11,6 +11,8 @@ const UUID_PATTERN =
 const RFC3339_PATTERN =
   /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(?:Z|[+-](\d{2}):(\d{2}))$/i;
 
+const HTTP_TOKEN_PATTERN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+
 const STRING_FIELDS = [
   "user_agent",
   "label",
@@ -233,6 +235,34 @@ function normalizeTimestamp(
   return timestamp;
 }
 
+function normalizeHttpMethod(
+  value: unknown,
+  path: string,
+  idempotencyKey: string | undefined,
+): string {
+  if (typeof value !== "string") {
+    throw validationError(
+      `${path} must be an RFC HTTP token from 1 to 64 characters`,
+      path,
+      idempotencyKey,
+    );
+  }
+
+  const method = value.trim().toUpperCase();
+  if (
+    method.length < 1 ||
+    method.length > 64 ||
+    !HTTP_TOKEN_PATTERN.test(method)
+  ) {
+    throw validationError(
+      `${path} must be an RFC HTTP token from 1 to 64 characters`,
+      path,
+      idempotencyKey,
+    );
+  }
+  return method;
+}
+
 export function normalizeEvent(
   input: TrafficWarEvent,
   path: string,
@@ -259,7 +289,11 @@ export function normalizeEvent(
   }
 
   const normalized: Record<string, unknown> = {};
+  let httpMethodProvided = false;
   for (const [key, value] of entries) {
+    if (key === "http_method") {
+      httpMethodProvided = true;
+    }
     // JSON.stringify omits undefined object properties. Omitting them here also
     // keeps the normalized clone JSON-only without touching the caller object.
     if (value !== undefined) {
@@ -333,6 +367,14 @@ export function normalizeEvent(
     throw validationError(
       `${path}.status_code must be an integer from 0 to 65535`,
       `${path}.status_code`,
+      idempotencyKey,
+    );
+  }
+
+  if (httpMethodProvided) {
+    normalized.http_method = normalizeHttpMethod(
+      normalized.http_method,
+      `${path}.http_method`,
       idempotencyKey,
     );
   }

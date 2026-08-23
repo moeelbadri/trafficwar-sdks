@@ -32,6 +32,8 @@ export interface TrafficWarEvent {
   trace_id?: string;
   distinct_id?: string;
   path?: string;
+  /** RFC HTTP token, normalized to uppercase after trimming. */
+  http_method?: string;
   error?: string;
   exception?: string;
   error_code?: string;

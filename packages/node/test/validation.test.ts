@@ -177,6 +177,52 @@ describe("TrafficWar event validation", () => {
   );
 
   it.each([
+    [" get ", "GET"],
+    ["m-search", "M-SEARCH"],
+    ["!#$%&'*+-.^_`|~012az", "!#$%&'*+-.^_`|~012AZ"],
+    ["x".repeat(64), "X".repeat(64)],
+  ])("normalizes valid HTTP method %j", async (http_method, expected) => {
+    let sent: Array<Record<string, unknown>> = [];
+    const client = clientWith(async (_url, init) => {
+      sent = bodyEvents(init);
+      return success(init);
+    });
+    const event = { event: "http", http_method };
+
+    client.capture(event);
+    await client.close();
+
+    expect(event.http_method).toBe(http_method);
+    expect(sent[0]?.http_method).toBe(expected);
+  });
+
+  it.each([
+    undefined,
+    null,
+    123,
+    "",
+    "   ",
+    "GET /v1/checkout",
+    "GET\tPOST",
+    "GÉT",
+    "x".repeat(65),
+  ])("rejects invalid explicit HTTP method %j", (http_method) => {
+    const client = clientWith(async (_url, init) => success(init));
+
+    expect(() =>
+      client.capture({
+        event: "http",
+        http_method,
+      } as unknown as TrafficWarEvent),
+    ).toThrow(
+      expect.objectContaining({
+        name: "TrafficWarValidationError",
+        path: "event.http_method",
+      }),
+    );
+  });
+
+  it.each([
     "today",
     "2026-08-21",
     "2026-02-29T12:00:00Z",

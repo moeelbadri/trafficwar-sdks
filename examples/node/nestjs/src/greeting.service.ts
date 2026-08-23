@@ -48,7 +48,7 @@ export class GreetingService implements OnModuleDestroy {
     }
   }
 
-  findGreeting(name: string): Greeting | undefined {
+  findGreeting(name: string, httpMethod: string): Greeting | undefined {
     const requestStartedAt = performance.now();
     const queryStartedAt = performance.now();
     const row = this.#findByName(name);
@@ -56,13 +56,14 @@ export class GreetingService implements OnModuleDestroy {
     const statusCode = row ? 200 : 404;
 
     this.trafficwar.capture({
-      event: "hello.request",
+      event: "http",
       distinct_id: name,
       path: "/hello/:name",
+      http_method: httpMethod,
       label: "GET /hello/:name",
-      source: "nestjs",
+      source: "backend-1",
       span_kind: "server",
-      operation_type: "sqlite.select",
+      operation_type: "route.handler",
       status_code: statusCode,
       latency_ms: performance.now() - requestStartedAt,
       properties: {

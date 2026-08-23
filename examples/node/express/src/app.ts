@@ -71,13 +71,14 @@ export function createApp(trafficwar: TrafficWar): ExpressExample {
     const statusCode = row ? 200 : 404;
 
     trafficwar.capture({
-      event: "hello.request",
+      event: "http",
       distinct_id: request.params.name,
       path: "/hello/:name",
+      http_method: request.method,
       label: "GET /hello/:name",
-      source: "express",
+      source: "backend-1",
       span_kind: "server",
-      operation_type: "sqlite.select",
+      operation_type: "route.handler",
       status_code: statusCode,
       latency_ms: performance.now() - requestStartedAt,
       properties: {

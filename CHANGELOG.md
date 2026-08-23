@@ -2,6 +2,16 @@
 
 All notable changes to the TrafficWar server SDKs are documented here.
 
+## 2.2.0 (Node.js) / Unreleased (Python) - 2026-08-23
+
+- Add typed optional `http_method` event support to Node.js and Python. Values
+  are trimmed, normalized to uppercase, and validated as 1–64-character RFC
+  HTTP tokens.
+- Align capture examples with the canonical `http`, `database`, `redis`, and
+  `s3` event categories while preserving `source`, `label`, `path`, and
+  `operation_type` semantics.
+- Document shutdown with `close` only; stop telling callers to invoke `flush`.
+
 ## 2.1.1 (Node.js) - 2026-08-22
 
 - Default missing event `timestamp` to capture time in the Node.js and Python

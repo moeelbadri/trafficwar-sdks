@@ -83,12 +83,13 @@ function assertCommonEvent(
   event: CapturedEvent,
   expectedStatus: number,
 ): void {
-  assert.equal(event.event, "hello.request");
+  assert.equal(event.event, "http");
   assert.equal(event.path, "/hello/:name");
+  assert.equal(event.http_method, "GET");
   assert.equal(event.label, "GET /hello/:name");
-  assert.equal(event.source, "nestjs");
+  assert.equal(event.source, "backend-1");
   assert.equal(event.span_kind, "server");
-  assert.equal(event.operation_type, "sqlite.select");
+  assert.equal(event.operation_type, "route.handler");
   assert.equal(event.status_code, expectedStatus);
   assert.equal(typeof event.latency_ms, "number");
   assert.ok(Number.isFinite(event.latency_ms));

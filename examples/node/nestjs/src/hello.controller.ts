@@ -4,7 +4,9 @@ import {
   Inject,
   NotFoundException,
   Param,
+  Req,
 } from "@nestjs/common";
+import type { Request } from "express";
 
 import {
   GreetingService,
@@ -18,8 +20,8 @@ export class HelloController {
   ) {}
 
   @Get(":name")
-  hello(@Param("name") name: string): Greeting {
-    const greeting = this.greetings.findGreeting(name);
+  hello(@Param("name") name: string, @Req() request: Request): Greeting {
+    const greeting = this.greetings.findGreeting(name, request.method);
     if (!greeting) {
       throw new NotFoundException("Greeting not found");
     }

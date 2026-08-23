@@ -178,6 +178,63 @@ def test_status_code_must_be_uint16(status_code: Any) -> None:
 
 
 @pytest.mark.parametrize(
+    ("http_method", "expected"),
+    [
+        (" get ", "GET"),
+        ("m-search", "M-SEARCH"),
+        ("!#$%&'*+-.^_`|~012az", "!#$%&'*+-.^_`|~012AZ"),
+        ("x" * 64, "X" * 64),
+    ],
+)
+def test_http_method_is_normalized(http_method: str, expected: str) -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return success(request)
+
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    client = TrafficWar(
+        "key",
+        compression="none",
+        flush_interval=60,
+        http_client=http,
+    )
+    event = {"event": "http", "http_method": http_method}
+
+    client.capture(event)
+    client.flush()
+
+    assert event["http_method"] == http_method
+    assert json.loads(requests[0].content)[0]["http_method"] == expected
+    client.close()
+    http.close()
+
+
+@pytest.mark.parametrize(
+    "http_method",
+    [
+        None,
+        123,
+        "",
+        "   ",
+        "GET /v1/checkout",
+        "GET\tPOST",
+        "GÉT",
+        "x" * 65,
+    ],
+)
+def test_invalid_explicit_http_method_is_rejected(http_method: Any) -> None:
+    client, http = sync_client()
+
+    with pytest.raises(ValidationError, match=r"event\.http_method"):
+        client.capture({"event": "http", "http_method": http_method})
+
+    client.close()
+    http.close()
+
+
+@pytest.mark.parametrize(
     "timestamp",
     [
         "2026-08-21 12:00:00Z",

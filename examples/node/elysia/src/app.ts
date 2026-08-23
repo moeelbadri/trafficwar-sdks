@@ -62,7 +62,7 @@ export function createApp(trafficwar: TrafficWar) {
       }
       return undefined;
     })
-    .get("/hello/:name", ({ params, set }) => {
+    .get("/hello/:name", ({ params, request, set }) => {
       const requestStartedAt = performance.now();
       const queryStartedAt = performance.now();
       const row = greetings.findByName(params.name);
@@ -70,13 +70,14 @@ export function createApp(trafficwar: TrafficWar) {
       const statusCode = row ? 200 : 404;
 
       trafficwar.capture({
-        event: "hello.request",
+        event: "http",
         distinct_id: params.name,
         path: "/hello/:name",
+        http_method: request.method,
         label: "GET /hello/:name",
-        source: "elysia",
+        source: "backend-1",
         span_kind: "server",
-        operation_type: "sqlite.select",
+        operation_type: "route.handler",
         status_code: statusCode,
         latency_ms: performance.now() - requestStartedAt,
         properties: {

@@ -54,6 +54,7 @@ STRING_FIELDS = frozenset(
         "trace_id",
         "distinct_id",
         "path",
+        "http_method",
         "error",
         "exception",
         "error_code",
@@ -74,6 +75,7 @@ UUID_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
     re.IGNORECASE,
 )
+HTTP_TOKEN_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
 
 
 class _PreparedRequestTooLarge(Exception):
@@ -247,6 +249,14 @@ class BaseTrafficWar:
         for field in STRING_FIELDS:
             if field in normalized and not isinstance(normalized[field], str):
                 raise ValidationError(f"{prefix}.{field} must be a string")
+
+        if "http_method" in normalized:
+            http_method = cast(str, normalized["http_method"]).strip().upper()
+            if not 1 <= len(http_method) <= 64 or HTTP_TOKEN_RE.fullmatch(http_method) is None:
+                raise ValidationError(
+                    f"{prefix}.http_method must be an RFC HTTP token from 1 through 64 characters"
+                )
+            normalized["http_method"] = http_method
 
         if "event_id" in normalized:
             event_id = cast(str, normalized["event_id"])

@@ -1,9 +1,9 @@
 # TrafficWar + FastAPI
 
 A compact FastAPI application that reads a greeting from SQLite and awaits only
-the enqueue step for a `hello.request` event through `AsyncTrafficWar`. The
-handler responds without waiting for delivery and captures both successful
-lookups and `404` responses.
+the enqueue step for an `http` event with the real `GET` method through
+`AsyncTrafficWar`. The handler responds without waiting for delivery and
+captures both successful lookups and `404` responses.
 
 `create_app()` owns a seeded in-memory SQLite connection and, unless one is
 injected, an async TrafficWar client. SQLite work runs in an AnyIO worker thread;
