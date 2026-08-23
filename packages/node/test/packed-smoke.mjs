@@ -68,7 +68,7 @@ assert.equal(typeof TrafficWarError, "function");
   writeFileSync(
     join(consumerRoot, "esm.mts"),
     `import { TrafficWar, type FlushResult, type TrafficWarEvent } from "@trafficwar/node";
-const event: TrafficWarEvent = { event: "esm.typecheck" };
+const event: TrafficWarEvent = { event: "http", http_method: "GET" };
 const client = new TrafficWar({ apiKey: "test-key" });
 client.capture([event]);
 const pending: Promise<FlushResult> = client.flush();
@@ -78,7 +78,7 @@ void pending;
   writeFileSync(
     join(consumerRoot, "cjs.cts"),
     `import { TrafficWar, type FlushResult, type TrafficWarEvent } from "@trafficwar/node";
-const event: TrafficWarEvent = { event: "cjs.typecheck" };
+const event: TrafficWarEvent = { event: "http", http_method: "GET" };
 const client = new TrafficWar({ apiKey: "test-key" });
 client.capture([event]);
 const pending: Promise<FlushResult> = client.flush();

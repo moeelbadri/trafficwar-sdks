@@ -98,13 +98,14 @@ async def test_seeded_greeting_is_returned_and_captured() -> None:
         assert len(flushed.batches) == 1
         assert len(events) == 1
         event = events[0]
-        assert event["event"] == "hello.request"
+        assert event["event"] == "http"
         assert event["distinct_id"] == "Ada"
         assert event["path"] == "/hello/{name}"
+        assert event["http_method"] == "GET"
         assert event["label"] == "greeting.lookup"
-        assert event["source"] == "fastapi"
+        assert event["source"] == "backend-1"
         assert event["span_kind"] == "server"
-        assert event["operation_type"] == "sqlite.select"
+        assert event["operation_type"] == "route.handler"
         assert event["status_code"] == 200
         assert math.isfinite(event["latency_ms"])
         assert event["latency_ms"] >= 0
@@ -126,6 +127,7 @@ async def test_missing_greeting_returns_404_and_captures_error_status() -> None:
         assert len(events) == 1
         event = events[0]
         assert event["distinct_id"] == "Grace"
+        assert event["http_method"] == "GET"
         assert event["status_code"] == 404
         assert event["error"] == "greeting_not_found"
         assert event["properties"]["found"] is False

@@ -131,6 +131,7 @@ def create_app(
 
     @application.get("/hello/{name}")
     async def hello(
+        request: Request,
         name: str,
         store: GreetingStoreDep,
         telemetry: TrafficWarDep,
@@ -142,13 +143,14 @@ def create_app(
         status_code = 200 if found else 404
 
         event: Event = {
-            "event": "hello.request",
+            "event": "http",
             "distinct_id": name,
             "path": "/hello/{name}",
+            "http_method": request.method,
             "label": "greeting.lookup",
-            "source": "fastapi",
+            "source": "backend-1",
             "span_kind": "server",
-            "operation_type": "sqlite.select",
+            "operation_type": "route.handler",
             "status_code": status_code,
             "latency_ms": latency_ms,
             "properties": {

@@ -9,7 +9,7 @@ from .telemetry import get_trafficwar_client
 
 
 @require_GET
-def hello(_request: HttpRequest, name: str) -> JsonResponse:
+def hello(request: HttpRequest, name: str) -> JsonResponse:
     started = perf_counter()
     message = (
         Greeting.objects.filter(name=name).values_list("message", flat=True).first()
@@ -19,13 +19,14 @@ def hello(_request: HttpRequest, name: str) -> JsonResponse:
     status_code = 200 if found else 404
 
     event: Event = {
-        "event": "hello.request",
+        "event": "http",
         "distinct_id": name,
         "path": "/hello/{name}/",
+        "http_method": request.method,
         "label": "greeting.lookup",
-        "source": "django",
+        "source": "backend-1",
         "span_kind": "server",
-        "operation_type": "sqlite.select",
+        "operation_type": "route.handler",
         "status_code": status_code,
         "latency_ms": latency_ms,
         "properties": {

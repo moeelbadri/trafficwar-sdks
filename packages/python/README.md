@@ -23,18 +23,49 @@ from trafficwar import Event, TrafficWar
 trafficwar = TrafficWar("tw_live_...")
 try:
     event: Event = {
-        "event": "checkout",
-        "latency_ms": 184.7,
-        "status_code": 200,
-        "source": "checkout-api",
-        "distinct_id": "visitor-42",
-        "properties": {"cart_items": 3, "currency": "EUR"},
+        "event": "http",
+        "http_method": "GET",
+        "label": "Checkout",
+        "path": "/v1/checkout",
+        "source": "backend-a",
+        "operation_type": "route.handler",
+        "latency_ms": 184.2,
+        "distinct_id": "u_123",
+        "trace_id": "tr_1",
     }
     trafficwar.capture(event)
     trafficwar.capture(
         [
-            {"event": "job.started", "source": "worker"},
-            {"event": "job.finished", "source": "worker", "latency_ms": 42},
+            {
+                "event": "database",
+                "label": "Checkout",
+                "path": "/v1/checkout",
+                "source": "db-primary",
+                "operation_type": "postgres.select",
+                "latency_ms": 48.2,
+                "distinct_id": "u_123",
+                "trace_id": "tr_1",
+            },
+            {
+                "event": "redis",
+                "label": "Checkout",
+                "path": "/v1/checkout",
+                "source": "redis-1",
+                "operation_type": "redis.get",
+                "latency_ms": 1.4,
+                "distinct_id": "u_123",
+                "trace_id": "tr_1",
+            },
+            {
+                "event": "s3",
+                "label": "Checkout",
+                "path": "/v1/checkout",
+                "source": "s3",
+                "operation_type": "s3.get_object",
+                "latency_ms": 22.0,
+                "distinct_id": "u_123",
+                "trace_id": "tr_1",
+            },
         ]
     )
 finally:
@@ -55,11 +86,47 @@ from trafficwar import AsyncTrafficWar
 
 trafficwar = AsyncTrafficWar("tw_live_...")
 try:
-    await trafficwar.capture({"event": "page_view", "path": "/pricing", "source": "fastapi"})
+    await trafficwar.capture(
+        {
+            "event": "http",
+            "http_method": "GET",
+            "label": "Pricing",
+            "path": "/pricing",
+            "source": "backend-a",
+            "operation_type": "route.handler",
+            "latency_ms": 82.4,
+            "trace_id": "tr_1",
+        }
+    )
     await trafficwar.capture(
         [
-            {"event": "signup.started", "source": "fastapi"},
-            {"event": "signup.finished", "source": "fastapi", "latency_ms": 92},
+            {
+                "event": "database",
+                "label": "Pricing",
+                "path": "/pricing",
+                "source": "db-replica-1",
+                "operation_type": "postgres.select",
+                "latency_ms": 6.1,
+                "trace_id": "tr_1",
+            },
+            {
+                "event": "redis",
+                "label": "Pricing",
+                "path": "/pricing",
+                "source": "redis-1",
+                "operation_type": "redis.get",
+                "latency_ms": 1.4,
+                "trace_id": "tr_1",
+            },
+            {
+                "event": "s3",
+                "label": "Pricing",
+                "path": "/pricing",
+                "source": "s3",
+                "operation_type": "s3.get_object",
+                "latency_ms": 22.0,
+                "trace_id": "tr_1",
+            },
         ]
     )
 finally:
@@ -111,6 +178,8 @@ optional fields:
 - `properties` (JSON)
 - `user_agent`, `label`, `ip`, `source`, `country`, `city`
 - `trace_id`, `distinct_id`, `path`
+- `http_method` (trimmed and normalized to uppercase; must be a
+  1–64-character RFC HTTP token)
 - `error`, `exception`, `error_code`
 - `span_kind` (`server`, `client`, `producer`, `consumer`, or `internal`)
 - `operation_type`
@@ -119,9 +188,13 @@ optional fields:
 The SDK generates a process-monotonic RFC 9562 UUIDv7 `event_id` for each event
 that omits one. A caller may override it with any valid UUID.
 
-Use `source` for caller-selected origin or runtime metadata such as
-`checkout-api`, `django`, or `worker`. `span_kind` is separate, optional
-trace-specific role metadata; it does not replace `source`.
+Canonical `event` categories are `http`, `database`, `redis`, and `s3`. Use
+`source` for the emitting host (`backend-a`, `db-primary`, `redis-1`, `s3`),
+`label` for the human route name (`Checkout`), `path` for the route URL
+(`/v1/checkout`), and `operation_type` for the concrete work
+(`route.handler`, `postgres.select`, `redis.get`, `s3.get_object`). Spans of
+one request share `trace_id`. `span_kind` is separate, optional trace-specific
+role metadata; it does not replace `source`.
 
 Caller-owned mappings are never modified. JSON is serialized once in compact,
 deterministic UTF-8 form. Automatic gzip starts at 1 KiB; configure
@@ -142,27 +215,20 @@ client = TrafficWar(
 
 The decoded JSON limit is 8 MiB and the transmitted-body limit is 2 MiB.
 
-## Flush results and shutdown
-
-Call `flush()` when an application needs an acknowledgement before continuing:
-
-```python
-client.capture({"event": "deployment.finished", "source": "release-worker"})
-result = client.flush()
-
-print(result.accepted)
-for batch in result.batches:
-    print(batch.ingest_id, batch.accepted, batch.idempotency_key)
-```
-
-`flush()` and `await flush()` return an aggregate `FlushResult`: `accepted` is
-the number of events drained by that operation, and `batches` contains one
-`IngestResult` per HTTP request.
+## Shutdown
 
 Always call synchronous `close()` or await async `aclose()` during graceful
-application shutdown. Close already stops automatic work and flushes every
-queued event, so a separate shutdown flush is unnecessary. The synchronous
-worker is a daemon thread, and the async client owns a background task; exiting
+application shutdown:
+
+```python
+result = client.close()
+print(result.accepted, len(result.batches))
+```
+
+Close stops automatic work and sends every queued event. It returns an
+aggregate `FlushResult`: `accepted` is the number of events drained, and
+`batches` contains one `IngestResult` per HTTP request. The synchronous worker
+is a daemon thread, and the async client owns a background task; exiting
 without closing can lose pending events or leak task/resource warnings.
 
 `capture_batch(events)` remains as a deprecated compatibility alias. New code
@@ -183,8 +249,8 @@ quota HTTP 429 responses are never retried.
 
 An automatic delivery failure invokes optional `on_error`. The callback is
 observational: the failed prepared batch remains queued. A later automatic
-attempt, `flush`, `close`, or `aclose` retries that same batch, and an explicit
-flush or close surfaces an error if delivery still fails.
+attempt, `close`, or `aclose` retries that same batch, and close surfaces an
+error if delivery still fails.
 
 ## Errors
 
@@ -207,7 +273,7 @@ from trafficwar import RateLimitError
 client.capture({"event": "job.failed", "status_code": 500})
 
 try:
-    client.flush()
+    client.close()
 except RateLimitError as exc:
     print(exc.period, exc.remaining_events, exc.retry_after)
 ```

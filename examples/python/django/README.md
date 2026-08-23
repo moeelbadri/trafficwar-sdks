@@ -1,9 +1,9 @@
 # TrafficWar + Django
 
-A minimal Django 5.2 application that reads a greeting from SQLite, enqueues a
-`hello.request` event with the synchronous TrafficWar SDK, and responds without
-waiting for delivery. Both successful lookups and `404` responses are
-captured.
+A minimal Django 5.2 application that reads a greeting from SQLite, enqueues an
+`http` event with the real `GET` method through the synchronous TrafficWar SDK,
+and responds without waiting for delivery. Both successful lookups and `404`
+responses are captured.
 
 The initial migration creates the `Greeting` table and seeds:
 

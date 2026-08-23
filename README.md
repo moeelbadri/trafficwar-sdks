@@ -27,17 +27,48 @@ const trafficwar = new TrafficWar({
 });
 
 trafficwar.capture({
-  event: "checkout.completed",
-  distinct_id: "customer_123",
+  event: "http",
+  http_method: "GET",
+  label: "Checkout",
+  path: "/v1/checkout",
+  source: "backend-a",
+  operation_type: "route.handler",
   latency_ms: 184.2,
-  status_code: 200,
-  source: "checkout-api",
-  properties: { order_id: "order_456" },
+  distinct_id: "u_123",
+  trace_id: "tr_1",
 });
 
 trafficwar.capture([
-  { event: "job.started", source: "worker" },
-  { event: "job.finished", source: "worker", latency_ms: 42 },
+  {
+    event: "database",
+    label: "Checkout",
+    path: "/v1/checkout",
+    source: "db-primary",
+    operation_type: "postgres.select",
+    latency_ms: 48.2,
+    distinct_id: "u_123",
+    trace_id: "tr_1",
+  },
+  {
+    event: "redis",
+    label: "Checkout",
+    path: "/v1/checkout",
+    source: "redis-1",
+    operation_type: "redis.get",
+    latency_ms: 1.4,
+    distinct_id: "u_123",
+    trace_id: "tr_1",
+  },
+  {
+    event: "s3",
+    label: "Checkout",
+    path: "/v1/checkout",
+    source: "s3",
+    operation_type: "s3.get_object",
+    latency_ms: 22.0,
+    distinct_id: "u_123",
+    trace_id: "tr_1",
+  },
 ]);
 
 const flushed = await trafficwar.close();
@@ -62,18 +93,49 @@ trafficwar = TrafficWar(api_key=os.environ["TRAFFICWAR_API_KEY"])
 try:
     trafficwar.capture(
         {
-            "event": "checkout.completed",
-            "distinct_id": "customer_123",
+            "event": "http",
+            "http_method": "GET",
+            "label": "Checkout",
+            "path": "/v1/checkout",
+            "source": "backend-a",
+            "operation_type": "route.handler",
             "latency_ms": 184.2,
-            "status_code": 200,
-            "source": "checkout-api",
-            "properties": {"order_id": "order_456"},
+            "distinct_id": "u_123",
+            "trace_id": "tr_1",
         }
     )
     trafficwar.capture(
         [
-            {"event": "job.started", "source": "worker"},
-            {"event": "job.finished", "source": "worker", "latency_ms": 42},
+            {
+                "event": "database",
+                "label": "Checkout",
+                "path": "/v1/checkout",
+                "source": "db-primary",
+                "operation_type": "postgres.select",
+                "latency_ms": 48.2,
+                "distinct_id": "u_123",
+                "trace_id": "tr_1",
+            },
+            {
+                "event": "redis",
+                "label": "Checkout",
+                "path": "/v1/checkout",
+                "source": "redis-1",
+                "operation_type": "redis.get",
+                "latency_ms": 1.4,
+                "distinct_id": "u_123",
+                "trace_id": "tr_1",
+            },
+            {
+                "event": "s3",
+                "label": "Checkout",
+                "path": "/v1/checkout",
+                "source": "s3",
+                "operation_type": "s3.get_object",
+                "latency_ms": 22.0,
+                "distinct_id": "u_123",
+                "trace_id": "tr_1",
+            },
         ]
     )
 finally:
@@ -94,12 +156,46 @@ async def send_events() -> None:
     trafficwar = AsyncTrafficWar(api_key=os.environ["TRAFFICWAR_API_KEY"])
     try:
         await trafficwar.capture(
-            {"event": "checkout.completed", "source": "checkout-api"}
+            {
+                "event": "http",
+                "http_method": "GET",
+                "label": "Checkout",
+                "path": "/v1/checkout",
+                "source": "backend-a",
+                "operation_type": "route.handler",
+                "latency_ms": 184.2,
+                "trace_id": "tr_1",
+            }
         )
         await trafficwar.capture(
             [
-                {"event": "job.started", "source": "worker"},
-                {"event": "job.finished", "source": "worker"},
+                {
+                    "event": "database",
+                    "label": "Checkout",
+                    "path": "/v1/checkout",
+                    "source": "db-primary",
+                    "operation_type": "postgres.select",
+                    "latency_ms": 48.2,
+                    "trace_id": "tr_1",
+                },
+                {
+                    "event": "redis",
+                    "label": "Checkout",
+                    "path": "/v1/checkout",
+                    "source": "redis-1",
+                    "operation_type": "redis.get",
+                    "latency_ms": 1.4,
+                    "trace_id": "tr_1",
+                },
+                {
+                    "event": "s3",
+                    "label": "Checkout",
+                    "path": "/v1/checkout",
+                    "source": "s3",
+                    "operation_type": "s3.get_object",
+                    "latency_ms": 22.0,
+                    "trace_id": "tr_1",
+                },
             ]
         )
     finally:
@@ -122,9 +218,15 @@ configurable. Every send is a bare JSON array to `/v1/server/batch`; larger
 queued inputs are split into server-sized HTTP batches.
 
 The SDK adds a process-monotonic RFC 9562 UUIDv7 `event_id` unless the caller
-supplies any valid UUID. `source` is caller-selected origin or runtime metadata,
-such as `checkout-api` or `worker`. `span_kind` is separate, optional tracing
-semantics; it does not replace `source`.
+supplies any valid UUID. Canonical `event` categories are `http`, `database`,
+`redis`, and `s3`. `source` is the emitting host (`backend-a`, `db-primary`,
+`redis-1`, `s3`); `label` is the human route name (`Checkout`); `path` is the
+route URL (`/v1/checkout`); and `operation_type` identifies the concrete work
+(`route.handler`, `postgres.select`, `redis.get`, `s3.get_object`). For HTTP
+events, `http_method` is trimmed and normalized to uppercase and must be a
+1–64-character RFC HTTP token. Spans of one request share `trace_id`.
+`span_kind` is separate, optional tracing semantics; it does not replace
+`source`.
 
 `captureBatch` and `capture_batch` remain as deprecated compatibility aliases;
 new code passes arrays or iterables directly to `capture`.
@@ -132,14 +234,14 @@ new code passes arrays or iterables directly to `capture`.
 Each prepared HTTP batch gets an internal idempotency key that remains stable
 across retries, along with the same serialized body. Automatic delivery errors
 can be observed with optional `onError` (Node) or `on_error` (Python)
-callbacks. Failed batches stay queued, and a later `flush`, `close`, or
-`aclose` retries them and surfaces any remaining error.
+callbacks. Failed batches stay queued, and a later automatic attempt, `close`,
+or `aclose` retries them and surfaces any remaining error.
 
 Applications must close clients during graceful shutdown. Node's automatic
 flush timer is unref'ed, and synchronous Python's worker thread is a daemon, so
-neither keeps a process alive for pending events. `flush` and close operations
-return an aggregate `FlushResult` with `accepted` and the per-request
-acknowledgements in `batches`; `capture` never returns an `IngestResult`.
+neither keeps a process alive for pending events. Close returns an aggregate
+`FlushResult` with `accepted` and the per-request acknowledgements in
+`batches`; `capture` never returns an `IngestResult`.
 
 ## Framework examples
 

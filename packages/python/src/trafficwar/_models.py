@@ -31,6 +31,7 @@ class Event(_RequiredEvent, total=False):
     trace_id: str
     distinct_id: str
     path: str
+    http_method: str
     error: str
     exception: str
     error_code: str

@@ -25,19 +25,48 @@ const trafficwar = new TrafficWar({
 });
 
 trafficwar.capture({
-  event: "checkout.completed",
+  event: "http",
+  http_method: "GET",
+  label: "Checkout",
+  path: "/v1/checkout",
+  source: "backend-a",
+  operation_type: "route.handler",
   latency_ms: 184.2,
-  status_code: 200,
-  source: "checkout-api",
-  properties: {
-    orderId: "ord_123",
-    total: 49.95,
-  },
+  distinct_id: "u_123",
+  trace_id: "tr_1",
 });
 
 trafficwar.capture([
-  { event: "job.started", source: "worker" },
-  { event: "job.finished", source: "worker", latency_ms: 42 },
+  {
+    event: "database",
+    label: "Checkout",
+    path: "/v1/checkout",
+    source: "db-primary",
+    operation_type: "postgres.select",
+    latency_ms: 48.2,
+    distinct_id: "u_123",
+    trace_id: "tr_1",
+  },
+  {
+    event: "redis",
+    label: "Checkout",
+    path: "/v1/checkout",
+    source: "redis-1",
+    operation_type: "redis.get",
+    latency_ms: 1.4,
+    distinct_id: "u_123",
+    trace_id: "tr_1",
+  },
+  {
+    event: "s3",
+    label: "Checkout",
+    path: "/v1/checkout",
+    source: "s3",
+    operation_type: "s3.get_object",
+    latency_ms: 22.0,
+    distinct_id: "u_123",
+    trace_id: "tr_1",
+  },
 ]);
 ```
 
@@ -88,28 +117,18 @@ The SDK generates a process-monotonic RFC 9562 UUIDv7 `event_id` for each event
 that omits one. A caller may override it with any valid UUID. Caller-owned
 objects are never modified.
 
-Use `source` for caller-selected origin or runtime metadata such as
-`checkout-api`, `node-worker`, or `production`. `span_kind` is separate,
-optional tracing semantics (`server`, `client`, `producer`, `consumer`, or
-`internal`); it does not replace `source`.
+Canonical `event` categories are `http`, `database`, `redis`, and `s3`. Use
+`source` for the emitting host (`backend-a`, `db-primary`, `redis-1`, `s3`,
+`https://app.example.com`), `label` for the human route name (`Checkout`),
+`path` for the route URL (`/v1/checkout`), and `operation_type` for the
+concrete work (`route.handler`, `postgres.select`, `redis.get`,
+`s3.get_object`). For HTTP events, `http_method` is trimmed and normalized to
+uppercase and must be a 1–64-character RFC HTTP token. Spans of one request
+share `trace_id`. `span_kind` is separate, optional tracing semantics
+(`server`, `client`, `producer`, `consumer`, or `internal`); it does not
+replace `source`.
 
-## Flush results and shutdown
-
-Call `flush` when an application needs an acknowledgement before continuing:
-
-```ts
-trafficwar.capture({ event: "deployment.finished", source: "release-worker" });
-
-const result = await trafficwar.flush();
-console.log(result.accepted);
-for (const batch of result.batches) {
-  console.log(batch.ingestId, batch.accepted, batch.idempotencyKey);
-}
-```
-
-`flush` returns an aggregate `FlushResult`: `accepted` is the number of events
-drained by that operation, and `batches` contains one `IngestResult` per HTTP
-request.
+## Shutdown
 
 Always await `close` during graceful application shutdown:
 
@@ -118,9 +137,11 @@ const result = await trafficwar.close();
 console.log(result.accepted, result.batches.length);
 ```
 
-`close` already stops automatic work and flushes every queued event; a separate
-shutdown `flush` is unnecessary. The automatic timer is unref'ed and will not
-keep Node running, so exiting without awaiting `close` can lose pending events.
+`close` stops automatic work and sends every queued event. It returns an
+aggregate `FlushResult`: `accepted` is the number of events drained, and
+`batches` contains one `IngestResult` per HTTP request. The automatic timer is
+unref'ed and will not keep Node running, so exiting without awaiting `close`
+can lose pending events.
 
 `captureBatch(events)` remains as a deprecated compatibility alias. New code
 passes the non-empty array directly to `capture(events)`.
@@ -139,8 +160,8 @@ up to 60 seconds; larger values are surfaced immediately as API errors. HTTP
 
 An automatic delivery failure invokes optional `onError`. The handler is
 observational: the failed prepared batch remains queued. A later automatic
-attempt, `flush`, or `close` retries that same batch, and explicit `flush` or
-`close` surfaces an error if delivery still fails.
+attempt or `close` retries that same batch, and `close` surfaces an error if
+delivery still fails.
 
 ## Client options
 
@@ -177,7 +198,7 @@ import {
 trafficwar.capture({ event: "task.failed", status_code: 500 });
 
 try {
-  await trafficwar.flush();
+  await trafficwar.close();
 } catch (error) {
   if (error instanceof TrafficWarRateLimitError) {
     console.error(error.period, error.remainingEvents, error.retryAfterSeconds);
