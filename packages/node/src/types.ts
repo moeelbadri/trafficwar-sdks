@@ -12,12 +12,45 @@ export type SpanKind =
   | "consumer"
   | "internal";
 
+type OpenString<T extends string> =
+  | T
+  | (string & Record<never, never>);
+
+export type EventCategory = OpenString<
+  "http" | "database" | "redis" | "s3"
+>;
+
+export type OperationType = OpenString<
+  | "route.handler"
+  | "http.request"
+  | "postgres.select"
+  | "postgres.insert"
+  | "postgres.update"
+  | "postgres.delete"
+  | "redis.get"
+  | "redis.incr"
+  | "s3.get_object"
+  | "s3.put_object"
+  | "s3.head_object"
+>;
+
+export type KnownS3Provider = "aws-s3" | "ovh-s3" | "minio";
+
+/**
+ * An S3 provider alias, optionally qualified as `<bucket>.<provider>`.
+ * Examples: `ovh-s3`, `assets.ovh-s3`, `receipts.aws-s3`.
+ * The dot is reserved as the bucket/provider separator.
+ */
+export type S3Source = OpenString<
+  KnownS3Provider | `${string}.${KnownS3Provider}`
+>;
+
 /**
  * One TrafficWar event. Field names intentionally match the ingest wire
  * contract. Account and service identity are always derived from the API key.
  */
 export interface TrafficWarEvent {
-  event: string;
+  event: EventCategory;
   event_id?: string;
   /** RFC3339 string, epoch milliseconds, or Date. Defaults to capture time. */
   timestamp?: string | number | Date;
@@ -26,6 +59,11 @@ export interface TrafficWarEvent {
   user_agent?: string;
   label?: string;
   ip?: string;
+  /**
+   * Stable emitter or dependency alias. For S3, use a provider such as
+   * `ovh-s3`, or `<bucket>.<provider>` such as `assets.ovh-s3` when separate
+   * bucket stations are useful. Put the S3 action in `operation_type`.
+   */
   source?: string;
   country?: string;
   city?: string;
@@ -38,7 +76,8 @@ export interface TrafficWarEvent {
   exception?: string;
   error_code?: string;
   span_kind?: SpanKind;
-  operation_type?: string;
+  /** Concrete work performed, such as `route.handler` or `s3.get_object`. */
+  operation_type?: OperationType;
   status_code?: number;
 }
 

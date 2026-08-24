@@ -16,7 +16,13 @@ class _RequiredEvent(TypedDict):
 
 
 class Event(_RequiredEvent, total=False):
-    """A TrafficWar event accepted by the server ingestion API."""
+    """A TrafficWar event accepted by the server ingestion API.
+
+    For S3 events, ``source`` is a provider alias such as ``ovh-s3``. Use the
+    reserved ``<bucket>.<provider>`` form, such as ``assets.ovh-s3``, only when
+    separate bucket stations are useful. ``operation_type`` remains the S3
+    action, such as ``s3.get_object``.
+    """
 
     event_id: str
     timestamp: Timestamp

@@ -63,8 +63,8 @@ trafficwar.capture([
     event: "s3",
     label: "Checkout",
     path: "/v1/checkout",
-    source: "s3",
-    operation_type: "s3.get_object",
+    source: "receipts.ovh-s3",
+    operation_type: "s3.put_object",
     latency_ms: 22.0,
     distinct_id: "u_123",
     trace_id: "tr_1",
@@ -130,8 +130,8 @@ try:
                 "event": "s3",
                 "label": "Checkout",
                 "path": "/v1/checkout",
-                "source": "s3",
-                "operation_type": "s3.get_object",
+                "source": "receipts.ovh-s3",
+                "operation_type": "s3.put_object",
                 "latency_ms": 22.0,
                 "distinct_id": "u_123",
                 "trace_id": "tr_1",
@@ -191,8 +191,8 @@ async def send_events() -> None:
                     "event": "s3",
                     "label": "Checkout",
                     "path": "/v1/checkout",
-                    "source": "s3",
-                    "operation_type": "s3.get_object",
+                    "source": "receipts.ovh-s3",
+                    "operation_type": "s3.put_object",
                     "latency_ms": 22.0,
                     "trace_id": "tr_1",
                 },
@@ -219,14 +219,21 @@ queued inputs are split into server-sized HTTP batches.
 
 The SDK adds a process-monotonic RFC 9562 UUIDv7 `event_id` unless the caller
 supplies any valid UUID. Canonical `event` categories are `http`, `database`,
-`redis`, and `s3`. `source` is the emitting host (`backend-a`, `db-primary`,
-`redis-1`, `s3`); `label` is the human route name (`Checkout`); `path` is the
-route URL (`/v1/checkout`); and `operation_type` identifies the concrete work
-(`route.handler`, `postgres.select`, `redis.get`, `s3.get_object`). For HTTP
-events, `http_method` is trimmed and normalized to uppercase and must be a
-1–64-character RFC HTTP token. Spans of one request share `trace_id`.
-`span_kind` is separate, optional tracing semantics; it does not replace
-`source`.
+`redis`, and `s3`. `source` is the emitting host or dependency (`backend-a`,
+`db-primary`, `redis-1`, `ovh-s3`); `label` is the human route name
+(`Checkout`); `path` is the route URL (`/v1/checkout`); and `operation_type`
+identifies the concrete work (`route.handler`, `postgres.select`, `redis.get`,
+`s3.get_object`). For HTTP events, `http_method` is trimmed and normalized to
+uppercase and must be a 1–64-character RFC HTTP token. Spans of one request
+share `trace_id`. `span_kind` is separate, optional tracing semantics; it does
+not replace `source`.
+
+For S3, a provider alias such as `ovh-s3`, `aws-s3`, or `minio` creates one
+provider station. Prefix it as `<bucket>.<provider>` only when the map should
+separate buckets: `assets.ovh-s3` and `archive.ovh-s3` become distinct
+stations, while `operation_type` values such as `s3.get_object` and
+`s3.put_object` remain operation dots. The final dot is the reserved
+bucket/provider separator, so provider aliases must not contain dots.
 
 `captureBatch` and `capture_batch` remain as deprecated compatibility aliases;
 new code passes arrays or iterables directly to `capture`.

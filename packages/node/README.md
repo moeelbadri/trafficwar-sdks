@@ -61,8 +61,8 @@ trafficwar.capture([
     event: "s3",
     label: "Checkout",
     path: "/v1/checkout",
-    source: "s3",
-    operation_type: "s3.get_object",
+    source: "receipts.ovh-s3",
+    operation_type: "s3.put_object",
     latency_ms: 22.0,
     distinct_id: "u_123",
     trace_id: "tr_1",
@@ -118,15 +118,32 @@ that omits one. A caller may override it with any valid UUID. Caller-owned
 objects are never modified.
 
 Canonical `event` categories are `http`, `database`, `redis`, and `s3`. Use
-`source` for the emitting host (`backend-a`, `db-primary`, `redis-1`, `s3`,
-`https://app.example.com`), `label` for the human route name (`Checkout`),
-`path` for the route URL (`/v1/checkout`), and `operation_type` for the
-concrete work (`route.handler`, `postgres.select`, `redis.get`,
-`s3.get_object`). For HTTP events, `http_method` is trimmed and normalized to
-uppercase and must be a 1–64-character RFC HTTP token. Spans of one request
-share `trace_id`. `span_kind` is separate, optional tracing semantics
-(`server`, `client`, `producer`, `consumer`, or `internal`); it does not
-replace `source`.
+`source` for the emitting host or dependency (`backend-a`, `db-primary`,
+`redis-1`, `ovh-s3`, `https://app.example.com`), `label` for the human route
+name (`Checkout`), `path` for the route URL (`/v1/checkout`), and
+`operation_type` for the concrete work (`route.handler`, `postgres.select`,
+`redis.get`, `s3.get_object`). For HTTP events, `http_method` is trimmed and
+normalized to uppercase and must be a 1–64-character RFC HTTP token. Spans of
+one request share `trace_id`. `span_kind` is separate, optional tracing
+semantics (`server`, `client`, `producer`, `consumer`, or `internal`); it does
+not replace `source`.
+
+For S3, a provider alias such as `ovh-s3`, `aws-s3`, or `minio` creates one
+provider station. Prefix it as `<bucket>.<provider>` only when the map should
+separate buckets: `assets.ovh-s3` and `archive.ovh-s3` become distinct
+stations, while `operation_type` values such as `s3.get_object` and
+`s3.put_object` remain operation dots. The final dot is the reserved
+bucket/provider separator, so provider aliases must not contain dots.
+
+The package exports `EventCategory`, `OperationType`, `KnownS3Provider`, and
+`S3Source` for typed wrappers. These types suggest the canonical values in
+editors while still accepting custom event, operation, and provider aliases:
+
+```ts
+import type { S3Source } from "@trafficwar/node";
+
+const assets: S3Source = "assets.ovh-s3";
+```
 
 ## Shutdown
 

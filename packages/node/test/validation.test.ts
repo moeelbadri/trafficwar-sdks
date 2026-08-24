@@ -9,6 +9,7 @@ import {
   TRAFFICWAR_MAX_DECODED_BODY_BYTES,
 } from "../src";
 import type {
+  S3Source,
   TrafficWarEvent,
   TrafficWarFetch,
   TrafficWarOptions,
@@ -146,6 +147,25 @@ describe("TrafficWar event validation", () => {
       client.capture(event as unknown as TrafficWarEvent),
     ).toThrow(TrafficWarValidationError);
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("preserves S3 bucket.provider sources and operation types", async () => {
+    let sent: Array<Record<string, unknown>> = [];
+    const client = clientWith(async (_url, init) => {
+      sent = bodyEvents(init);
+      return success(init);
+    });
+    const source: S3Source = "assets.ovh-s3";
+
+    client.capture({
+      event: "s3",
+      source,
+      operation_type: "s3.get_object",
+    });
+    await client.close();
+
+    expect(sent[0]?.source).toBe("assets.ovh-s3");
+    expect(sent[0]?.operation_type).toBe("s3.get_object");
   });
 
   it.each([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(

@@ -2,6 +2,15 @@
 
 All notable changes to the TrafficWar server SDKs are documented here.
 
+## Unreleased
+
+- Add editor-friendly open event and operation types plus a documented
+  `S3Source` convention.
+- Define S3 `source` as a provider alias, optionally qualified as
+  `<bucket>.<provider>` when separate bucket stations are useful. Keep
+  `operation_type` as the operation-dot identity.
+- Update Node.js, Python, and trace examples to use provider-aware S3 sources.
+
 ## 2.2.0 (Node.js) / Unreleased (Python) - 2026-08-23
 
 - Add typed optional `http_method` event support to Node.js and Python. Values

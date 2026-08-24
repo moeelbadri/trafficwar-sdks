@@ -67,20 +67,22 @@ assert.equal(typeof TrafficWarError, "function");
   );
   writeFileSync(
     join(consumerRoot, "esm.mts"),
-    `import { TrafficWar, type FlushResult, type TrafficWarEvent } from "@trafficwar/node";
+    `import { TrafficWar, type FlushResult, type S3Source, type TrafficWarEvent } from "@trafficwar/node";
 const event: TrafficWarEvent = { event: "http", http_method: "GET" };
+const s3Source: S3Source = "assets.ovh-s3";
 const client = new TrafficWar({ apiKey: "test-key" });
-client.capture([event]);
+client.capture([event, { event: "s3", source: s3Source, operation_type: "s3.get_object" }]);
 const pending: Promise<FlushResult> = client.flush();
 void pending;
 `,
   );
   writeFileSync(
     join(consumerRoot, "cjs.cts"),
-    `import { TrafficWar, type FlushResult, type TrafficWarEvent } from "@trafficwar/node";
+    `import { TrafficWar, type FlushResult, type S3Source, type TrafficWarEvent } from "@trafficwar/node";
 const event: TrafficWarEvent = { event: "http", http_method: "GET" };
+const s3Source: S3Source = "assets.ovh-s3";
 const client = new TrafficWar({ apiKey: "test-key" });
-client.capture([event]);
+client.capture([event, { event: "s3", source: s3Source, operation_type: "s3.get_object" }]);
 const pending: Promise<FlushResult> = client.flush();
 void pending;
 `,

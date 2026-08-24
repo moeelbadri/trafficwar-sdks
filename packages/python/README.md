@@ -60,8 +60,8 @@ try:
                 "event": "s3",
                 "label": "Checkout",
                 "path": "/v1/checkout",
-                "source": "s3",
-                "operation_type": "s3.get_object",
+                "source": "receipts.ovh-s3",
+                "operation_type": "s3.put_object",
                 "latency_ms": 22.0,
                 "distinct_id": "u_123",
                 "trace_id": "tr_1",
@@ -122,7 +122,7 @@ try:
                 "event": "s3",
                 "label": "Pricing",
                 "path": "/pricing",
-                "source": "s3",
+                "source": "assets.ovh-s3",
                 "operation_type": "s3.get_object",
                 "latency_ms": 22.0,
                 "trace_id": "tr_1",
@@ -189,12 +189,19 @@ The SDK generates a process-monotonic RFC 9562 UUIDv7 `event_id` for each event
 that omits one. A caller may override it with any valid UUID.
 
 Canonical `event` categories are `http`, `database`, `redis`, and `s3`. Use
-`source` for the emitting host (`backend-a`, `db-primary`, `redis-1`, `s3`),
-`label` for the human route name (`Checkout`), `path` for the route URL
-(`/v1/checkout`), and `operation_type` for the concrete work
+`source` for the emitting host or dependency (`backend-a`, `db-primary`,
+`redis-1`, `ovh-s3`), `label` for the human route name (`Checkout`), `path`
+for the route URL (`/v1/checkout`), and `operation_type` for the concrete work
 (`route.handler`, `postgres.select`, `redis.get`, `s3.get_object`). Spans of
 one request share `trace_id`. `span_kind` is separate, optional trace-specific
 role metadata; it does not replace `source`.
+
+For S3, a provider alias such as `ovh-s3`, `aws-s3`, or `minio` creates one
+provider station. Prefix it as `<bucket>.<provider>` only when the map should
+separate buckets: `assets.ovh-s3` and `archive.ovh-s3` become distinct
+stations, while `operation_type` values such as `s3.get_object` and
+`s3.put_object` remain operation dots. The final dot is the reserved
+bucket/provider separator, so provider aliases must not contain dots.
 
 Caller-owned mappings are never modified. JSON is serialized once in compact,
 deterministic UTF-8 form. Automatic gzip starts at 1 KiB; configure

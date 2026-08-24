@@ -30,10 +30,14 @@ export type {
 
 export type {
   CompressionMode,
+  EventCategory,
   FlushResult,
   IngestResult,
   JsonPrimitive,
   JsonValue,
+  KnownS3Provider,
+  OperationType,
+  S3Source,
   SpanKind,
   TrafficWarEvent,
   TrafficWarErrorHandler,
