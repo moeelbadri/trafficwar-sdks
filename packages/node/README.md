@@ -32,8 +32,11 @@ trafficwar.capture({
   source: "backend-a",
   operation_type: "route.handler",
   latency_ms: 184.2,
-  distinct_id: "u_123",
+  distinct_id: "usr_7f3a91c2",
   trace_id: "tr_1",
+  properties: {
+    device_id: "dev_0198e743-a2c4-7c21",
+  },
 });
 
 trafficwar.capture([
@@ -44,7 +47,7 @@ trafficwar.capture([
     source: "db-primary",
     operation_type: "postgres.select",
     latency_ms: 48.2,
-    distinct_id: "u_123",
+    distinct_id: "usr_7f3a91c2",
     trace_id: "tr_1",
   },
   {
@@ -54,7 +57,7 @@ trafficwar.capture([
     source: "redis-1",
     operation_type: "redis.get",
     latency_ms: 1.4,
-    distinct_id: "u_123",
+    distinct_id: "usr_7f3a91c2",
     trace_id: "tr_1",
   },
   {
@@ -64,7 +67,7 @@ trafficwar.capture([
     source: "receipts.ovh-s3",
     operation_type: "s3.put_object",
     latency_ms: 22.0,
-    distinct_id: "u_123",
+    distinct_id: "usr_7f3a91c2",
     trace_id: "tr_1",
   },
 ]);
@@ -127,6 +130,43 @@ normalized to uppercase and must be a 1–64-character RFC HTTP token. Spans of
 one request share `trace_id`. `span_kind` is separate, optional tracing
 semantics (`server`, `client`, `producer`, `consumer`, or `internal`); it does
 not replace `source`.
+
+## Actor identity and application errors
+
+Use a stable pseudonymous `distinct_id` derived by your backend so one actor
+keeps the same identity across devices. Prefer an opaque internal ID or a
+backend-only HMAC; do not send a raw email address. Keep a separate
+installation identifier such as `device_id` in `properties` when device-level
+investigation matters.
+
+Send application failures with first-class outcome fields and keep the full
+stack trace in `properties`:
+
+```ts
+try {
+  await submitOrder();
+} catch (caught) {
+  const error = caught instanceof Error ? caught : new Error(String(caught));
+
+  trafficwar.capture({
+    event: "http",
+    label: "/checkout",
+    http_method: "POST",
+    status_code: 500,
+    error: error.message,
+    error_code: "CHECKOUT_FAILED",
+    distinct_id: "usr_7f3a91c2",
+    properties: {
+      exception_type: error.name,
+      stack_trace: error.stack ?? error.message,
+      cause: "connection deadline exceeded",
+    },
+  });
+}
+```
+
+`properties` is opaque and does not set `is_error`. Always send `error`,
+`error_code`, or a `status_code` of 400 or greater with diagnostic properties.
 
 For S3, a provider alias such as `ovh-s3`, `aws-s3`, or `minio` creates one
 provider station. Prefix it as `<bucket>.<provider>` only when the map should

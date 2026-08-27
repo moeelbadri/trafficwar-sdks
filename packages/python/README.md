@@ -30,8 +30,11 @@ try:
         "source": "backend-a",
         "operation_type": "route.handler",
         "latency_ms": 184.2,
-        "distinct_id": "u_123",
+        "distinct_id": "usr_7f3a91c2",
         "trace_id": "tr_1",
+        "properties": {
+            "device_id": "dev_0198e743-a2c4-7c21",
+        },
     }
     trafficwar.capture(event)
     trafficwar.capture(
@@ -43,7 +46,7 @@ try:
                 "source": "db-primary",
                 "operation_type": "postgres.select",
                 "latency_ms": 48.2,
-                "distinct_id": "u_123",
+                "distinct_id": "usr_7f3a91c2",
                 "trace_id": "tr_1",
             },
             {
@@ -53,7 +56,7 @@ try:
                 "source": "redis-1",
                 "operation_type": "redis.get",
                 "latency_ms": 1.4,
-                "distinct_id": "u_123",
+                "distinct_id": "usr_7f3a91c2",
                 "trace_id": "tr_1",
             },
             {
@@ -63,7 +66,7 @@ try:
                 "source": "receipts.ovh-s3",
                 "operation_type": "s3.put_object",
                 "latency_ms": 22.0,
-                "distinct_id": "u_123",
+                "distinct_id": "usr_7f3a91c2",
                 "trace_id": "tr_1",
             },
         ]
@@ -95,7 +98,11 @@ try:
             "source": "backend-a",
             "operation_type": "route.handler",
             "latency_ms": 82.4,
+            "distinct_id": "usr_7f3a91c2",
             "trace_id": "tr_1",
+            "properties": {
+                "device_id": "dev_0198e743-a2c4-7c21",
+            },
         }
     )
     await trafficwar.capture(
@@ -107,6 +114,7 @@ try:
                 "source": "db-replica-1",
                 "operation_type": "postgres.select",
                 "latency_ms": 6.1,
+                "distinct_id": "usr_7f3a91c2",
                 "trace_id": "tr_1",
             },
             {
@@ -116,6 +124,7 @@ try:
                 "source": "redis-1",
                 "operation_type": "redis.get",
                 "latency_ms": 1.4,
+                "distinct_id": "usr_7f3a91c2",
                 "trace_id": "tr_1",
             },
             {
@@ -125,6 +134,7 @@ try:
                 "source": "assets.ovh-s3",
                 "operation_type": "s3.get_object",
                 "latency_ms": 22.0,
+                "distinct_id": "usr_7f3a91c2",
                 "trace_id": "tr_1",
             },
         ]
@@ -195,6 +205,46 @@ for the route URL (`/v1/checkout`), and `operation_type` for the concrete work
 (`route.handler`, `postgres.select`, `redis.get`, `s3.get_object`). Spans of
 one request share `trace_id`. `span_kind` is separate, optional trace-specific
 role metadata; it does not replace `source`.
+
+## Actor identity and application errors
+
+Use a stable pseudonymous `distinct_id` derived by your backend so one actor
+keeps the same identity across devices. Prefer an opaque internal ID or a
+backend-only HMAC; do not send a raw email address. Keep a separate
+installation identifier such as `device_id` in `properties` when device-level
+investigation matters.
+
+Send application failures with first-class outcome fields and keep the full
+stack trace in `properties`:
+
+```python
+import traceback
+
+try:
+    submit_order()
+except Exception as exc:
+    client.capture(
+        {
+            "event": "http",
+            "label": "/checkout",
+            "http_method": "POST",
+            "status_code": 500,
+            "error": str(exc),
+            "error_code": type(exc).__name__,
+            "distinct_id": "usr_7f3a91c2",
+            "properties": {
+                "exception_type": type(exc).__name__,
+                "stack_trace": "".join(
+                    traceback.format_exception(type(exc), exc, exc.__traceback__)
+                ),
+                "cause": str(exc.__cause__) if exc.__cause__ else "",
+            },
+        }
+    )
+```
+
+`properties` is opaque and does not set `is_error`. Always send `error`,
+`error_code`, or a `status_code` of 400 or greater with diagnostic properties.
 
 For S3, a provider alias such as `ovh-s3`, `aws-s3`, or `minio` creates one
 provider station. Prefix it as `<bucket>.<provider>` only when the map should

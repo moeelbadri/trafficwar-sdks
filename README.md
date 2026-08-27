@@ -34,8 +34,11 @@ trafficwar.capture({
   source: "backend-a",
   operation_type: "route.handler",
   latency_ms: 184.2,
-  distinct_id: "u_123",
+  distinct_id: "usr_7f3a91c2",
   trace_id: "tr_1",
+  properties: {
+    device_id: "dev_0198e743-a2c4-7c21",
+  },
 });
 
 trafficwar.capture([
@@ -46,7 +49,7 @@ trafficwar.capture([
     source: "db-primary",
     operation_type: "postgres.select",
     latency_ms: 48.2,
-    distinct_id: "u_123",
+    distinct_id: "usr_7f3a91c2",
     trace_id: "tr_1",
   },
   {
@@ -56,7 +59,7 @@ trafficwar.capture([
     source: "redis-1",
     operation_type: "redis.get",
     latency_ms: 1.4,
-    distinct_id: "u_123",
+    distinct_id: "usr_7f3a91c2",
     trace_id: "tr_1",
   },
   {
@@ -66,7 +69,7 @@ trafficwar.capture([
     source: "receipts.ovh-s3",
     operation_type: "s3.put_object",
     latency_ms: 22.0,
-    distinct_id: "u_123",
+    distinct_id: "usr_7f3a91c2",
     trace_id: "tr_1",
   },
 ]);
@@ -74,6 +77,38 @@ trafficwar.capture([
 const flushed = await trafficwar.close();
 console.log(flushed.accepted, flushed.batches.length);
 ```
+
+Use a stable pseudonymous `distinct_id` derived by the application backend,
+not a raw email address. Keep a separate device identifier in `properties`
+when the same actor may use multiple devices.
+
+Application failures should keep their first-class outcome fields and place
+the complete stack trace in `properties`:
+
+```ts
+try {
+  await submitOrder();
+} catch (caught) {
+  const error = caught instanceof Error ? caught : new Error(String(caught));
+
+  trafficwar.capture({
+    event: "http",
+    label: "/checkout",
+    status_code: 500,
+    error: error.message,
+    error_code: "CHECKOUT_FAILED",
+    distinct_id: "usr_7f3a91c2",
+    properties: {
+      exception_type: error.name,
+      stack_trace: error.stack ?? error.message,
+      cause: "connection deadline exceeded",
+    },
+  });
+}
+```
+
+Properties alone do not set `is_error`; send `error`, `error_code`, or an
+error `status_code` as shown above.
 
 Pass `debug: true` to the constructor to print safe batch lifecycle logs with
 `console.debug`. Debug logging is disabled by default.
@@ -100,8 +135,11 @@ try:
             "source": "backend-a",
             "operation_type": "route.handler",
             "latency_ms": 184.2,
-            "distinct_id": "u_123",
+            "distinct_id": "usr_7f3a91c2",
             "trace_id": "tr_1",
+            "properties": {
+                "device_id": "dev_0198e743-a2c4-7c21",
+            },
         }
     )
     trafficwar.capture(
@@ -113,7 +151,7 @@ try:
                 "source": "db-primary",
                 "operation_type": "postgres.select",
                 "latency_ms": 48.2,
-                "distinct_id": "u_123",
+                "distinct_id": "usr_7f3a91c2",
                 "trace_id": "tr_1",
             },
             {
@@ -123,7 +161,7 @@ try:
                 "source": "redis-1",
                 "operation_type": "redis.get",
                 "latency_ms": 1.4,
-                "distinct_id": "u_123",
+                "distinct_id": "usr_7f3a91c2",
                 "trace_id": "tr_1",
             },
             {
@@ -133,7 +171,7 @@ try:
                 "source": "receipts.ovh-s3",
                 "operation_type": "s3.put_object",
                 "latency_ms": 22.0,
-                "distinct_id": "u_123",
+                "distinct_id": "usr_7f3a91c2",
                 "trace_id": "tr_1",
             },
         ]
@@ -164,7 +202,11 @@ async def send_events() -> None:
                 "source": "backend-a",
                 "operation_type": "route.handler",
                 "latency_ms": 184.2,
+                "distinct_id": "usr_7f3a91c2",
                 "trace_id": "tr_1",
+                "properties": {
+                    "device_id": "dev_0198e743-a2c4-7c21",
+                },
             }
         )
         await trafficwar.capture(
@@ -176,6 +218,7 @@ async def send_events() -> None:
                     "source": "db-primary",
                     "operation_type": "postgres.select",
                     "latency_ms": 48.2,
+                    "distinct_id": "usr_7f3a91c2",
                     "trace_id": "tr_1",
                 },
                 {
@@ -185,6 +228,7 @@ async def send_events() -> None:
                     "source": "redis-1",
                     "operation_type": "redis.get",
                     "latency_ms": 1.4,
+                    "distinct_id": "usr_7f3a91c2",
                     "trace_id": "tr_1",
                 },
                 {
@@ -194,6 +238,7 @@ async def send_events() -> None:
                     "source": "receipts.ovh-s3",
                     "operation_type": "s3.put_object",
                     "latency_ms": 22.0,
+                    "distinct_id": "usr_7f3a91c2",
                     "trace_id": "tr_1",
                 },
             ]
