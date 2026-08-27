@@ -4,6 +4,24 @@ All notable changes to the TrafficWar server SDKs are documented here.
 
 ## Unreleased
 
+## 2.2.2 (Node.js) / Unreleased (Python) - 2026-08-27
+
+- Document the tier placement rule. `event`, `source`, and `span_kind` decide
+  whether a span renders on the edge, backend, or infrastructure tier, `source`
+  is evaluated before `span_kind`, and `operation_type` never affects
+  placement. Previously this was only discoverable by experiment.
+- Rewrite the trace examples so they produce usable tier data: every span
+  carries `span_kind` and an explicit `timestamp`, dependencies are emitted
+  first and the edge span last, and the nesting contract is stated.
+- Warn that the capture-time `timestamp` default collapses a trace recorded
+  after its request onto one instant.
+- Document how a server-emitted edge span should be measured, why `latency_ms`
+  must not be omitted to avoid inventing one, that `source` derived from
+  `Origin` or `Referer` belongs on an allowlist, and that outbound third-party
+  HTTP has no dependency category today.
+- Replace the non-canonical `task.failed` example event and stop using a URL
+  as a `label`.
+
 ## 2.2.1 (Node.js) / Unreleased (Python) - 2026-08-27
 
 - Add editor-friendly open event and operation types plus a documented

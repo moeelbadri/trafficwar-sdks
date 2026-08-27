@@ -28,51 +28,19 @@ const trafficwar = new TrafficWar({
 
 trafficwar.capture({
   event: "http",
-  http_method: "GET",
+  http_method: "POST",
   label: "Checkout",
   path: "/v1/checkout",
   source: "backend-a",
+  span_kind: "server",
   operation_type: "route.handler",
+  status_code: 200,
   latency_ms: 184.2,
   distinct_id: "usr_7f3a91c2",
-  trace_id: "tr_1",
   properties: {
     device_id: "dev_0198e743-a2c4-7c21",
   },
 });
-
-trafficwar.capture([
-  {
-    event: "database",
-    label: "Checkout",
-    path: "/v1/checkout",
-    source: "db-primary",
-    operation_type: "postgres.select",
-    latency_ms: 48.2,
-    distinct_id: "usr_7f3a91c2",
-    trace_id: "tr_1",
-  },
-  {
-    event: "redis",
-    label: "Checkout",
-    path: "/v1/checkout",
-    source: "redis-1",
-    operation_type: "redis.get",
-    latency_ms: 1.4,
-    distinct_id: "usr_7f3a91c2",
-    trace_id: "tr_1",
-  },
-  {
-    event: "s3",
-    label: "Checkout",
-    path: "/v1/checkout",
-    source: "receipts.ovh-s3",
-    operation_type: "s3.put_object",
-    latency_ms: 22.0,
-    distinct_id: "usr_7f3a91c2",
-    trace_id: "tr_1",
-  },
-]);
 
 const flushed = await trafficwar.close();
 console.log(flushed.accepted, flushed.batches.length);
@@ -93,7 +61,10 @@ try {
 
   trafficwar.capture({
     event: "http",
-    label: "/checkout",
+    label: "Checkout",
+    path: "/v1/checkout",
+    source: "backend-a",
+    span_kind: "server",
     status_code: 500,
     error: error.message,
     error_code: "CHECKOUT_FAILED",
@@ -129,52 +100,19 @@ try:
     trafficwar.capture(
         {
             "event": "http",
-            "http_method": "GET",
+            "http_method": "POST",
             "label": "Checkout",
             "path": "/v1/checkout",
             "source": "backend-a",
+            "span_kind": "server",
             "operation_type": "route.handler",
+            "status_code": 200,
             "latency_ms": 184.2,
             "distinct_id": "usr_7f3a91c2",
-            "trace_id": "tr_1",
             "properties": {
                 "device_id": "dev_0198e743-a2c4-7c21",
             },
         }
-    )
-    trafficwar.capture(
-        [
-            {
-                "event": "database",
-                "label": "Checkout",
-                "path": "/v1/checkout",
-                "source": "db-primary",
-                "operation_type": "postgres.select",
-                "latency_ms": 48.2,
-                "distinct_id": "usr_7f3a91c2",
-                "trace_id": "tr_1",
-            },
-            {
-                "event": "redis",
-                "label": "Checkout",
-                "path": "/v1/checkout",
-                "source": "redis-1",
-                "operation_type": "redis.get",
-                "latency_ms": 1.4,
-                "distinct_id": "usr_7f3a91c2",
-                "trace_id": "tr_1",
-            },
-            {
-                "event": "s3",
-                "label": "Checkout",
-                "path": "/v1/checkout",
-                "source": "receipts.ovh-s3",
-                "operation_type": "s3.put_object",
-                "latency_ms": 22.0,
-                "distinct_id": "usr_7f3a91c2",
-                "trace_id": "tr_1",
-            },
-        ]
     )
 finally:
     flushed = trafficwar.close()
@@ -196,52 +134,19 @@ async def send_events() -> None:
         await trafficwar.capture(
             {
                 "event": "http",
-                "http_method": "GET",
+                "http_method": "POST",
                 "label": "Checkout",
                 "path": "/v1/checkout",
                 "source": "backend-a",
+                "span_kind": "server",
                 "operation_type": "route.handler",
+                "status_code": 200,
                 "latency_ms": 184.2,
                 "distinct_id": "usr_7f3a91c2",
-                "trace_id": "tr_1",
                 "properties": {
                     "device_id": "dev_0198e743-a2c4-7c21",
                 },
             }
-        )
-        await trafficwar.capture(
-            [
-                {
-                    "event": "database",
-                    "label": "Checkout",
-                    "path": "/v1/checkout",
-                    "source": "db-primary",
-                    "operation_type": "postgres.select",
-                    "latency_ms": 48.2,
-                    "distinct_id": "usr_7f3a91c2",
-                    "trace_id": "tr_1",
-                },
-                {
-                    "event": "redis",
-                    "label": "Checkout",
-                    "path": "/v1/checkout",
-                    "source": "redis-1",
-                    "operation_type": "redis.get",
-                    "latency_ms": 1.4,
-                    "distinct_id": "usr_7f3a91c2",
-                    "trace_id": "tr_1",
-                },
-                {
-                    "event": "s3",
-                    "label": "Checkout",
-                    "path": "/v1/checkout",
-                    "source": "receipts.ovh-s3",
-                    "operation_type": "s3.put_object",
-                    "latency_ms": 22.0,
-                    "distinct_id": "usr_7f3a91c2",
-                    "trace_id": "tr_1",
-                },
-            ]
         )
     finally:
         flushed = await trafficwar.aclose()
@@ -270,8 +175,37 @@ supplies any valid UUID. Canonical `event` categories are `http`, `database`,
 identifies the concrete work (`route.handler`, `postgres.select`, `redis.get`,
 `s3.get_object`). For HTTP events, `http_method` is trimmed and normalized to
 uppercase and must be a 1–64-character RFC HTTP token. Spans of one request
-share `trace_id`. `span_kind` is separate, optional tracing semantics; it does
-not replace `source`.
+share `trace_id`. `span_kind` does not replace `source`, and it is not
+decorative: `event`, `source`, and `span_kind` are the three fields that place
+a span on a tier.
+
+## Traces and tiers
+
+Spans of one request share `trace_id` and `label`. There is no `span_id` or
+`parent_span_id` on the wire, so TrafficWar places each span on a tier from its
+own fields, in this order:
+
+1. `event` is `database`, `redis`, or `s3` — **infrastructure**.
+2. `event` is `http` and `source` is an absolute `http(s)://` URL, or starts
+   with `web`, `browser`, `client`, `edge`, or `frontend` followed by a
+   separator or nothing (`web`, `web-eu`, `frontend.eu`, but not `webhooks`)
+   — **edge**.
+3. `event` is `http` and `source` contains `api`, `backend`, or `server` as a
+   token delimited by `-`, `_`, or `.` — **backend**.
+4. `event` is `http` and `span_kind` is `server` — **backend**; `client` —
+   **edge**.
+5. Anything else — **edge**.
+
+`source` is tested before `span_kind`, so a `source` such as `api.example.com`
+pins a span to the backend tier whatever its `span_kind` says.
+`operation_type` never affects tier placement.
+
+Emit dependency spans first and the edge span last, keep inclusive durations
+nested so that the dependency total does not exceed the server span and the
+server span does not exceed the client span, and set `timestamp` explicitly on
+every span of a trace — the capture-time default collapses a trace recorded
+after the request onto one instant. Full runnable trace examples are in
+[`packages/node`](packages/node) and [`packages/python`](packages/python).
 
 For S3, a provider alias such as `ovh-s3`, `aws-s3`, or `minio` creates one
 provider station. Prefix it as `<bucket>.<provider>` only when the map should

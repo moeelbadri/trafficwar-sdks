@@ -26,52 +26,24 @@ const trafficwar = new TrafficWar({
 
 trafficwar.capture({
   event: "http",
-  http_method: "GET",
+  http_method: "POST",
   label: "Checkout",
   path: "/v1/checkout",
   source: "backend-a",
+  span_kind: "server",
   operation_type: "route.handler",
+  status_code: 200,
   latency_ms: 184.2,
   distinct_id: "usr_7f3a91c2",
-  trace_id: "tr_1",
   properties: {
     device_id: "dev_0198e743-a2c4-7c21",
   },
 });
-
-trafficwar.capture([
-  {
-    event: "database",
-    label: "Checkout",
-    path: "/v1/checkout",
-    source: "db-primary",
-    operation_type: "postgres.select",
-    latency_ms: 48.2,
-    distinct_id: "usr_7f3a91c2",
-    trace_id: "tr_1",
-  },
-  {
-    event: "redis",
-    label: "Checkout",
-    path: "/v1/checkout",
-    source: "redis-1",
-    operation_type: "redis.get",
-    latency_ms: 1.4,
-    distinct_id: "usr_7f3a91c2",
-    trace_id: "tr_1",
-  },
-  {
-    event: "s3",
-    label: "Checkout",
-    path: "/v1/checkout",
-    source: "receipts.ovh-s3",
-    operation_type: "s3.put_object",
-    latency_ms: 22.0,
-    distinct_id: "usr_7f3a91c2",
-    trace_id: "tr_1",
-  },
-]);
 ```
+
+`event`, `source`, and `span_kind` together decide which tier this span appears
+on. Read [Traces and tiers](#traces-and-tiers) before sending several spans per
+request.
 
 `capture` accepts one event or a non-empty array. It validates, snapshots, and
 enqueues the input synchronously, then returns `void`; it does not return an
@@ -80,7 +52,8 @@ enqueues the input synchronously, then returns `void`; it does not return an
 `Date` timestamps are serialized as RFC3339 without changing the caller's
 object. String timestamps must be RFC3339; numeric timestamps are integer epoch
 milliseconds. If `timestamp` is omitted, the SDK sets it to the current time at
-capture.
+capture, which is right for a standalone event and wrong for a trace captured
+after the request has already finished.
 
 ## Automatic batching
 
@@ -127,9 +100,107 @@ name (`Checkout`), `path` for the route URL (`/v1/checkout`), and
 `operation_type` for the concrete work (`route.handler`, `postgres.select`,
 `redis.get`, `s3.get_object`). For HTTP events, `http_method` is trimmed and
 normalized to uppercase and must be a 1–64-character RFC HTTP token. Spans of
-one request share `trace_id`. `span_kind` is separate, optional tracing
-semantics (`server`, `client`, `producer`, `consumer`, or `internal`); it does
-not replace `source`.
+one request share `trace_id`. `span_kind` is one of `server`, `client`,
+`producer`, `consumer`, or `internal`, lowercase; any other value is discarded.
+It does not replace `source`, and it is not decorative: `event`, `source`, and
+`span_kind` are the three fields that place a span on a tier.
+
+## Traces and tiers
+
+Spans of one request share `trace_id` and `label`. There is no `span_id` or
+`parent_span_id` on the wire, so TrafficWar places each span on a tier from its
+own fields, in this order:
+
+1. `event` is `database`, `redis`, or `s3` — **infrastructure**.
+2. `event` is `http` and `source` is an absolute `http(s)://` URL, or starts
+   with `web`, `browser`, `client`, `edge`, or `frontend` followed by a
+   separator or nothing (`web`, `web-eu`, `frontend.eu`, but not `webhooks`)
+   — **edge**.
+3. `event` is `http` and `source` contains `api`, `backend`, or `server` as a
+   token delimited by `-`, `_`, or `.` — **backend**.
+4. `event` is `http` and `span_kind` is `server` — **backend**; `client` —
+   **edge**.
+5. Anything else — **edge**.
+
+`source` is compared case-insensitively and is tested before `span_kind`, so a
+`source` such as `api.example.com` or `backend-a` pins a span to the backend
+tier regardless of its `span_kind`. Sending your own API hostname as the
+`source` of a browser-facing span is the most common way to get a span on the
+wrong tier. `operation_type` never affects tier placement; it names the
+operation dot on S3 stations. Only `server` and `client` select a tier:
+`producer`, `consumer`, and `internal` fall through to rule 5, so an `http`
+span with one of those kinds lands on the edge tier.
+
+On the edge and backend tiers the station is named by `label`, and `source`
+becomes an instance dot inside that station. Infrastructure stations are named
+from `event` and `source`, so `db-primary`, `redis-1`, and `receipts.ovh-s3`
+each get their own station.
+
+### Send a complete trace
+
+Emit dependency spans first and the edge span last, and keep inclusive
+durations nested: the sum of the dependency spans must not exceed the server
+span, which must not exceed the client span. Set `timestamp` on every span of a
+trace. A server normally captures all of its spans after the request has
+finished, and the default capture-time timestamp would collapse them onto one
+instant, leaving the waterfall with no chronological axis.
+
+```ts
+const trace_id = crypto.randomUUID();
+const startedAt = Date.now();
+const at = (offsetMs: number) => new Date(startedAt + offsetMs);
+const label = "Checkout";
+const path = "/v1/checkout";
+const distinct_id = "usr_7f3a91c2";
+
+trafficwar.capture([
+  { event: "database", label, path, distinct_id, trace_id,
+    source: "db-primary", operation_type: "postgres.select",
+    span_kind: "client", timestamp: at(20), latency_ms: 48.2 },
+  { event: "redis", label, path, distinct_id, trace_id,
+    source: "redis-1", operation_type: "redis.get",
+    span_kind: "client", timestamp: at(70), latency_ms: 1.4 },
+  { event: "s3", label, path, distinct_id, trace_id,
+    source: "receipts.ovh-s3", operation_type: "s3.put_object",
+    span_kind: "client", timestamp: at(75), latency_ms: 22.0 },
+  { event: "http", label, path, distinct_id, trace_id,
+    source: "backend-a", operation_type: "route.handler",
+    span_kind: "server", timestamp: at(8), latency_ms: 160,
+    http_method: "POST", status_code: 200 },
+  { event: "http", label, path, distinct_id, trace_id,
+    source: "https://app.example.com", operation_type: "http.request",
+    span_kind: "client", timestamp: at(0), latency_ms: 184.2,
+    http_method: "POST", status_code: 200 },
+]);
+```
+
+That trace renders as one journey: an edge station for `Checkout` with
+`https://app.example.com` as its caller, a backend station for `Checkout`
+served by `backend-a`, and three infrastructure stations beneath it.
+
+A single-span request needs none of this. One `http` span with
+`span_kind: "server"` is a complete, valid event.
+
+### Edge spans emitted by a server
+
+A server cannot measure a browser's round trip. If you emit the edge span from
+your backend, make it the widest interval you actually measured — the full
+server-side hop including routing and middleware — and let the server span
+cover only the handler. Do not invent a client round trip, and do not drop
+`latency_ms` to sidestep the problem: an absent value is stored as `0` and
+enters the latency histogram. If you have nothing wider than the handler to
+report, send the server span alone. A trace does not require an edge span.
+
+### Two cautions
+
+`source` is part of the metric aggregation grain. When you derive it from
+`Origin` or `Referer`, those are caller-controlled values: match them against
+an allowlist of hostnames you expect and collapse the rest to a single value
+such as `web-other`, rather than forwarding arbitrary header content.
+
+There is no category for outbound third-party HTTP. A call your backend makes
+to another vendor's API is `event: "http"` with `span_kind: "client"`, which is
+the edge signature, so it renders on the edge tier beside your real callers.
 
 ## Actor identity and application errors
 
@@ -150,7 +221,10 @@ try {
 
   trafficwar.capture({
     event: "http",
-    label: "/checkout",
+    label: "Checkout",
+    path: "/v1/checkout",
+    source: "backend-a",
+    span_kind: "server",
     http_method: "POST",
     status_code: 500,
     error: error.message,
@@ -252,7 +326,7 @@ import {
   TrafficWarValidationError,
 } from "@trafficwar/node";
 
-trafficwar.capture({ event: "task.failed", status_code: 500 });
+trafficwar.capture({ event: "http", label: "Checkout", status_code: 500 });
 
 try {
   await trafficwar.close();

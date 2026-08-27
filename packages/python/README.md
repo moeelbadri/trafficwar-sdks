@@ -24,53 +24,20 @@ trafficwar = TrafficWar("tw_live_...")
 try:
     event: Event = {
         "event": "http",
-        "http_method": "GET",
+        "http_method": "POST",
         "label": "Checkout",
         "path": "/v1/checkout",
         "source": "backend-a",
+        "span_kind": "server",
         "operation_type": "route.handler",
+        "status_code": 200,
         "latency_ms": 184.2,
         "distinct_id": "usr_7f3a91c2",
-        "trace_id": "tr_1",
         "properties": {
             "device_id": "dev_0198e743-a2c4-7c21",
         },
     }
     trafficwar.capture(event)
-    trafficwar.capture(
-        [
-            {
-                "event": "database",
-                "label": "Checkout",
-                "path": "/v1/checkout",
-                "source": "db-primary",
-                "operation_type": "postgres.select",
-                "latency_ms": 48.2,
-                "distinct_id": "usr_7f3a91c2",
-                "trace_id": "tr_1",
-            },
-            {
-                "event": "redis",
-                "label": "Checkout",
-                "path": "/v1/checkout",
-                "source": "redis-1",
-                "operation_type": "redis.get",
-                "latency_ms": 1.4,
-                "distinct_id": "usr_7f3a91c2",
-                "trace_id": "tr_1",
-            },
-            {
-                "event": "s3",
-                "label": "Checkout",
-                "path": "/v1/checkout",
-                "source": "receipts.ovh-s3",
-                "operation_type": "s3.put_object",
-                "latency_ms": 22.0,
-                "distinct_id": "usr_7f3a91c2",
-                "trace_id": "tr_1",
-            },
-        ]
-    )
 finally:
     flushed = trafficwar.close()
 
@@ -84,58 +51,83 @@ a context manager; leaving the context calls `close()`.
 
 ## Asynchronous client
 
+The array form sends one complete trace. Emit dependency spans first and the
+edge span last, and set `timestamp` on every span; see
+[Traces and tiers](#traces-and-tiers).
+
 ```python
+import uuid
+from datetime import datetime, timedelta, timezone
+
 from trafficwar import AsyncTrafficWar
 
 trafficwar = AsyncTrafficWar("tw_live_...")
+started_at = datetime.now(timezone.utc)
+trace_id = str(uuid.uuid4())
+
+
+def at(offset_ms: float) -> datetime:
+    return started_at + timedelta(milliseconds=offset_ms)
+
+
+common = {
+    "label": "Pricing",
+    "path": "/pricing",
+    "distinct_id": "usr_7f3a91c2",
+    "trace_id": trace_id,
+}
+
 try:
-    await trafficwar.capture(
-        {
-            "event": "http",
-            "http_method": "GET",
-            "label": "Pricing",
-            "path": "/pricing",
-            "source": "backend-a",
-            "operation_type": "route.handler",
-            "latency_ms": 82.4,
-            "distinct_id": "usr_7f3a91c2",
-            "trace_id": "tr_1",
-            "properties": {
-                "device_id": "dev_0198e743-a2c4-7c21",
-            },
-        }
-    )
     await trafficwar.capture(
         [
             {
+                **common,
                 "event": "database",
-                "label": "Pricing",
-                "path": "/pricing",
                 "source": "db-replica-1",
                 "operation_type": "postgres.select",
+                "span_kind": "client",
+                "timestamp": at(12),
                 "latency_ms": 6.1,
-                "distinct_id": "usr_7f3a91c2",
-                "trace_id": "tr_1",
             },
             {
+                **common,
                 "event": "redis",
-                "label": "Pricing",
-                "path": "/pricing",
                 "source": "redis-1",
                 "operation_type": "redis.get",
+                "span_kind": "client",
+                "timestamp": at(20),
                 "latency_ms": 1.4,
-                "distinct_id": "usr_7f3a91c2",
-                "trace_id": "tr_1",
             },
             {
+                **common,
                 "event": "s3",
-                "label": "Pricing",
-                "path": "/pricing",
                 "source": "assets.ovh-s3",
                 "operation_type": "s3.get_object",
+                "span_kind": "client",
+                "timestamp": at(25),
                 "latency_ms": 22.0,
-                "distinct_id": "usr_7f3a91c2",
-                "trace_id": "tr_1",
+            },
+            {
+                **common,
+                "event": "http",
+                "http_method": "GET",
+                "status_code": 200,
+                "source": "backend-a",
+                "operation_type": "route.handler",
+                "span_kind": "server",
+                "timestamp": at(5),
+                "latency_ms": 68.0,
+            },
+            {
+                **common,
+                "event": "http",
+                "http_method": "GET",
+                "status_code": 200,
+                "source": "https://app.example.com",
+                "operation_type": "http.request",
+                "span_kind": "client",
+                "timestamp": at(0),
+                "latency_ms": 82.4,
             },
         ]
     )
@@ -203,8 +195,64 @@ Canonical `event` categories are `http`, `database`, `redis`, and `s3`. Use
 `redis-1`, `ovh-s3`), `label` for the human route name (`Checkout`), `path`
 for the route URL (`/v1/checkout`), and `operation_type` for the concrete work
 (`route.handler`, `postgres.select`, `redis.get`, `s3.get_object`). Spans of
-one request share `trace_id`. `span_kind` is separate, optional trace-specific
-role metadata; it does not replace `source`.
+one request share `trace_id`. `span_kind` does not replace `source`, and it is
+not decorative: `event`, `source`, and `span_kind` are the three fields that
+place a span on a tier.
+
+## Traces and tiers
+
+Spans of one request share `trace_id` and `label`. There is no `span_id` or
+`parent_span_id` on the wire, so TrafficWar places each span on a tier from its
+own fields, in this order:
+
+1. `event` is `database`, `redis`, or `s3` — **infrastructure**.
+2. `event` is `http` and `source` is an absolute `http(s)://` URL, or starts
+   with `web`, `browser`, `client`, `edge`, or `frontend` followed by a
+   separator or nothing (`web`, `web-eu`, `frontend.eu`, but not `webhooks`)
+   — **edge**.
+3. `event` is `http` and `source` contains `api`, `backend`, or `server` as a
+   token delimited by `-`, `_`, or `.` — **backend**.
+4. `event` is `http` and `span_kind` is `server` — **backend**; `client` —
+   **edge**.
+5. Anything else — **edge**.
+
+`source` is compared case-insensitively and is tested before `span_kind`, so a
+`source` such as `api.example.com` or `backend-a` pins a span to the backend
+tier regardless of its `span_kind`. Sending your own API hostname as the
+`source` of a browser-facing span is the most common way to get a span on the
+wrong tier. `operation_type` never affects tier placement; it names the
+operation dot on S3 stations. Only `server` and `client` select a tier:
+`producer`, `consumer`, and `internal` fall through to rule 5, so an `http`
+span with one of those kinds lands on the edge tier.
+
+On the edge and backend tiers the station is named by `label`, and `source`
+becomes an instance dot inside that station. Infrastructure stations are named
+from `event` and `source`, so `db-replica-1`, `redis-1`, and `assets.ovh-s3`
+each get their own station.
+
+Keep inclusive durations nested: the sum of the dependency spans must not
+exceed the server span, which must not exceed the client span. Set `timestamp`
+on every span of a trace. A server normally captures all of its spans after the
+request has finished, and the default capture-time timestamp would collapse
+them onto one instant, leaving the waterfall with no chronological axis. A
+single-span request needs none of this: one `http` span with
+`span_kind="server"` is a complete, valid event.
+
+A server cannot measure a browser's round trip. If you emit the edge span from
+your backend, make it the widest interval you actually measured — the full
+server-side hop including routing and middleware — and let the server span
+cover only the handler. Do not invent a client round trip, and do not drop
+`latency_ms` to sidestep the problem: an absent value is stored as `0` and
+enters the latency histogram. If you have nothing wider than the handler to
+report, send the server span alone.
+
+Two cautions. `source` is part of the metric aggregation grain, so when you
+derive it from `Origin` or `Referer`, match those caller-controlled values
+against an allowlist of hostnames you expect and collapse the rest to a single
+value such as `web-other`. And there is no category for outbound third-party
+HTTP: a call your backend makes to another vendor's API is `event="http"` with
+`span_kind="client"`, which is the edge signature, so it renders on the edge
+tier beside your real callers.
 
 ## Actor identity and application errors
 
