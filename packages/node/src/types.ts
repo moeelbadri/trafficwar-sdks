@@ -17,7 +17,7 @@ type OpenString<T extends string> =
   | (string & Record<never, never>);
 
 export type EventCategory = OpenString<
-  "http" | "database" | "redis" | "s3"
+  "http" | "database" | "redis" | "s3" | "external"
 >;
 
 export type OperationType = OpenString<
@@ -60,9 +60,10 @@ export interface TrafficWarEvent {
   label?: string;
   ip?: string;
   /**
-   * Stable emitter or dependency alias. For S3, use a provider such as
-   * `ovh-s3`, or `<bucket>.<provider>` such as `assets.ovh-s3` when separate
-   * bucket stations are useful. Put the S3 action in `operation_type`.
+   * Stable emitter or dependency alias. External-service stations are keyed by
+   * this value. For S3, use a provider such as `ovh-s3`, or
+   * `<bucket>.<provider>` such as `assets.ovh-s3` when separate bucket stations
+   * are useful. Put the concrete action in `operation_type`.
    */
   source?: string;
   country?: string;
@@ -76,7 +77,7 @@ export interface TrafficWarEvent {
   exception?: string;
   error_code?: string;
   span_kind?: SpanKind;
-  /** Concrete work performed, such as `route.handler` or `s3.get_object`. */
+  /** Concrete work performed, such as `route.handler` or `google.routes.compute`. */
   operation_type?: OperationType;
   status_code?: number;
 }

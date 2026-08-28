@@ -109,6 +109,15 @@ try:
             },
             {
                 **common,
+                "event": "external",
+                "source": "search-provider",
+                "operation_type": "search.query",
+                "span_kind": "client",
+                "timestamp": at(48),
+                "latency_ms": 12.0,
+            },
+            {
+                **common,
                 "event": "http",
                 "http_method": "GET",
                 "status_code": 200,
@@ -190,14 +199,16 @@ optional fields:
 The SDK generates a process-monotonic RFC 9562 UUIDv7 `event_id` for each event
 that omits one. A caller may override it with any valid UUID.
 
-Canonical `event` categories are `http`, `database`, `redis`, and `s3`. Use
-`source` for the emitting host or dependency (`backend-a`, `db-primary`,
-`redis-1`, `ovh-s3`), `label` for the human route name (`Checkout`), `path`
-for the route URL (`/v1/checkout`), and `operation_type` for the concrete work
-(`route.handler`, `postgres.select`, `redis.get`, `s3.get_object`). Spans of
-one request share `trace_id`. `span_kind` does not replace `source`, and it is
-not decorative: `event`, `source`, and `span_kind` are the three fields that
-place a span on a tier.
+Canonical `event` categories are `http`, `database`, `redis`, `s3`, and
+`external`. Use `external` for an outbound HTTP service that belongs on the
+infrastructure tier. Use `source` for the emitting host or dependency
+(`backend-a`, `db-primary`, `redis-1`, `ovh-s3`, `google-routes`), `label` for
+the human route name (`Checkout`), `path` for the route URL
+(`/v1/checkout`), and `operation_type` for the concrete work
+(`route.handler`, `postgres.select`, `redis.get`, `s3.get_object`,
+`google.routes.compute`). Spans of one request share `trace_id`. `span_kind`
+does not replace `source`, and it is not decorative: `event`, `source`, and
+`span_kind` are the three fields that place a span on a tier.
 
 ## Traces and tiers
 
@@ -205,7 +216,8 @@ Spans of one request share `trace_id` and `label`. There is no `span_id` or
 `parent_span_id` on the wire, so TrafficWar places each span on a tier from its
 own fields, in this order:
 
-1. `event` is `database`, `redis`, or `s3` — **infrastructure**.
+1. `event` is `database`, `redis`, `s3`, or `external` —
+   **infrastructure**.
 2. `event` is `http` and `source` is an absolute `http(s)://` URL, or starts
    with `web`, `browser`, `client`, `edge`, or `frontend` followed by a
    separator or nothing (`web`, `web-eu`, `frontend.eu`, but not `webhooks`)
@@ -221,14 +233,14 @@ own fields, in this order:
 tier regardless of its `span_kind`. Sending your own API hostname as the
 `source` of a browser-facing span is the most common way to get a span on the
 wrong tier. `operation_type` never affects tier placement; it names the
-operation dot on S3 stations. Only `server` and `client` select a tier:
+concrete activity. Only `server` and `client` select an HTTP tier:
 `producer`, `consumer`, and `internal` fall through to rule 5, so an `http`
 span with one of those kinds lands on the edge tier.
 
 On the edge and backend tiers the station is named by `label`, and `source`
 becomes an instance dot inside that station. Infrastructure stations are named
-from `event` and `source`, so `db-replica-1`, `redis-1`, and `assets.ovh-s3`
-each get their own station.
+from `event` and `source`, so `db-replica-1`, `redis-1`, `assets.ovh-s3`, and
+`search-provider` each get their own station.
 
 Keep inclusive durations nested: the sum of the dependency spans must not
 exceed the server span, which must not exceed the client span. Set `timestamp`
@@ -249,10 +261,14 @@ report, send the server span alone.
 Two cautions. `source` is part of the metric aggregation grain, so when you
 derive it from `Origin` or `Referer`, match those caller-controlled values
 against an allowlist of hostnames you expect and collapse the rest to a single
-value such as `web-other`. And there is no category for outbound third-party
-HTTP: a call your backend makes to another vendor's API is `event="http"` with
-`span_kind="client"`, which is the edge signature, so it renders on the edge
-tier beside your real callers.
+value such as `web-other`.
+
+For an outbound third-party HTTP call, send `event="external"` with
+`span_kind="client"`. Keep the provider in `source` and the API action in
+`operation_type`; this creates a source-keyed infrastructure station. The
+incoming caller remains an `http` client span. If a request has no trusted
+`Origin` or `Referer`, use a stable value such as `web-direct`; never substitute
+your own API `Host` header.
 
 ## Actor identity and application errors
 

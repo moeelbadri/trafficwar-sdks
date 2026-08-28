@@ -4,6 +4,15 @@ All notable changes to the TrafficWar server SDKs are documented here.
 
 ## Unreleased
 
+## 2.2.3 (Node.js) / Unreleased (Python) - 2026-08-28
+
+- Add `external` to the canonical `EventCategory` suggestions for outbound
+  HTTP services that belong on TrafficWar's infrastructure tier.
+- Document source-keyed external-service stations and update the trace examples
+  to distinguish incoming HTTP client spans from outbound dependencies.
+- Replace the 2.2.2 warning that third-party HTTP must render on the edge tier;
+  no new wire field is required and existing event payloads remain compatible.
+
 ## 2.2.2 (Node.js) / Unreleased (Python) - 2026-08-27
 
 - Document the tier placement rule. `event`, `source`, and `span_kind` decide

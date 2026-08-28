@@ -169,15 +169,16 @@ queued inputs are split into server-sized HTTP batches.
 
 The SDK adds a process-monotonic RFC 9562 UUIDv7 `event_id` unless the caller
 supplies any valid UUID. Canonical `event` categories are `http`, `database`,
-`redis`, and `s3`. `source` is the emitting host or dependency (`backend-a`,
-`db-primary`, `redis-1`, `ovh-s3`); `label` is the human route name
-(`Checkout`); `path` is the route URL (`/v1/checkout`); and `operation_type`
-identifies the concrete work (`route.handler`, `postgres.select`, `redis.get`,
-`s3.get_object`). For HTTP events, `http_method` is trimmed and normalized to
-uppercase and must be a 1–64-character RFC HTTP token. Spans of one request
-share `trace_id`. `span_kind` does not replace `source`, and it is not
-decorative: `event`, `source`, and `span_kind` are the three fields that place
-a span on a tier.
+`redis`, `s3`, and `external`. Use `external` for outbound HTTP services on
+the infrastructure tier. `source` is the emitting host or dependency
+(`backend-a`, `db-primary`, `redis-1`, `ovh-s3`, `google-routes`); `label` is
+the human route name (`Checkout`); `path` is the route URL (`/v1/checkout`);
+and `operation_type` identifies the concrete work (`route.handler`,
+`postgres.select`, `redis.get`, `s3.get_object`, `google.routes.compute`).
+For HTTP events, `http_method` is trimmed and normalized to uppercase and must
+be a 1–64-character RFC HTTP token. Spans of one request share `trace_id`.
+`span_kind` does not replace `source`, and it is not decorative: `event`,
+`source`, and `span_kind` are the three fields that place a span on a tier.
 
 ## Traces and tiers
 
@@ -185,7 +186,8 @@ Spans of one request share `trace_id` and `label`. There is no `span_id` or
 `parent_span_id` on the wire, so TrafficWar places each span on a tier from its
 own fields, in this order:
 
-1. `event` is `database`, `redis`, or `s3` — **infrastructure**.
+1. `event` is `database`, `redis`, `s3`, or `external` —
+   **infrastructure**.
 2. `event` is `http` and `source` is an absolute `http(s)://` URL, or starts
    with `web`, `browser`, `client`, `edge`, or `frontend` followed by a
    separator or nothing (`web`, `web-eu`, `frontend.eu`, but not `webhooks`)
@@ -199,6 +201,13 @@ own fields, in this order:
 `source` is tested before `span_kind`, so a `source` such as `api.example.com`
 pins a span to the backend tier whatever its `span_kind` says.
 `operation_type` never affects tier placement.
+
+An outbound HTTP dependency is `event: "external"` with
+`span_kind: "client"`. Its infrastructure station is keyed by `source`; the
+shared `label` continues to correlate it with the incoming `http` client span
+and the backend `http` server span. If an incoming request has no trusted
+`Origin` or `Referer`, use a stable caller such as `web-direct`; never
+substitute the API `Host` header.
 
 Emit dependency spans first and the edge span last, keep inclusive durations
 nested so that the dependency total does not exceed the server span and the

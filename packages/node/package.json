@@ -1,6 +1,6 @@
 {
   "name": "@trafficwar/node",
-  "version": "2.2.2",
+  "version": "2.2.3",
   "description": "Official TrafficWar server-side SDK for Node.js",
   "author": "TrafficWar",
   "license": "MIT",

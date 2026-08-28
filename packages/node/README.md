@@ -93,17 +93,20 @@ The SDK generates a process-monotonic RFC 9562 UUIDv7 `event_id` for each event
 that omits one. A caller may override it with any valid UUID. Caller-owned
 objects are never modified.
 
-Canonical `event` categories are `http`, `database`, `redis`, and `s3`. Use
+Canonical `event` categories are `http`, `database`, `redis`, `s3`, and
+`external`. Use `external` for an outbound HTTP service that belongs on the
+infrastructure tier. Use
 `source` for the emitting host or dependency (`backend-a`, `db-primary`,
-`redis-1`, `ovh-s3`, `https://app.example.com`), `label` for the human route
-name (`Checkout`), `path` for the route URL (`/v1/checkout`), and
-`operation_type` for the concrete work (`route.handler`, `postgres.select`,
-`redis.get`, `s3.get_object`). For HTTP events, `http_method` is trimmed and
-normalized to uppercase and must be a 1–64-character RFC HTTP token. Spans of
-one request share `trace_id`. `span_kind` is one of `server`, `client`,
-`producer`, `consumer`, or `internal`, lowercase; any other value is discarded.
-It does not replace `source`, and it is not decorative: `event`, `source`, and
-`span_kind` are the three fields that place a span on a tier.
+`redis-1`, `ovh-s3`, `google-routes`, `https://app.example.com`), `label` for
+the human route name (`Checkout`), `path` for the route URL
+(`/v1/checkout`), and `operation_type` for the concrete work
+(`route.handler`, `postgres.select`, `redis.get`, `s3.get_object`,
+`google.routes.compute`). For HTTP events, `http_method` is trimmed and
+normalized to uppercase and must be a 1–64-character RFC HTTP token. Spans
+of one request share `trace_id`. `span_kind` is one of `server`, `client`,
+`producer`, `consumer`, or `internal`, lowercase; any other value is
+discarded. It does not replace `source`, and it is not decorative: `event`,
+`source`, and `span_kind` are the three fields that place a span on a tier.
 
 ## Traces and tiers
 
@@ -111,7 +114,8 @@ Spans of one request share `trace_id` and `label`. There is no `span_id` or
 `parent_span_id` on the wire, so TrafficWar places each span on a tier from its
 own fields, in this order:
 
-1. `event` is `database`, `redis`, or `s3` — **infrastructure**.
+1. `event` is `database`, `redis`, `s3`, or `external` —
+   **infrastructure**.
 2. `event` is `http` and `source` is an absolute `http(s)://` URL, or starts
    with `web`, `browser`, `client`, `edge`, or `frontend` followed by a
    separator or nothing (`web`, `web-eu`, `frontend.eu`, but not `webhooks`)
@@ -127,14 +131,14 @@ own fields, in this order:
 tier regardless of its `span_kind`. Sending your own API hostname as the
 `source` of a browser-facing span is the most common way to get a span on the
 wrong tier. `operation_type` never affects tier placement; it names the
-operation dot on S3 stations. Only `server` and `client` select a tier:
+concrete activity. Only `server` and `client` select an HTTP tier:
 `producer`, `consumer`, and `internal` fall through to rule 5, so an `http`
 span with one of those kinds lands on the edge tier.
 
 On the edge and backend tiers the station is named by `label`, and `source`
 becomes an instance dot inside that station. Infrastructure stations are named
-from `event` and `source`, so `db-primary`, `redis-1`, and `receipts.ovh-s3`
-each get their own station.
+from `event` and `source`, so `db-primary`, `redis-1`, `receipts.ovh-s3`, and
+`google-routes` each get their own station.
 
 ### Send a complete trace
 
@@ -163,6 +167,9 @@ trafficwar.capture([
   { event: "s3", label, path, distinct_id, trace_id,
     source: "receipts.ovh-s3", operation_type: "s3.put_object",
     span_kind: "client", timestamp: at(75), latency_ms: 22.0 },
+  { event: "external", label, path, distinct_id, trace_id,
+    source: "payment-gateway", operation_type: "payment.authorize",
+    span_kind: "client", timestamp: at(100), latency_ms: 20.0 },
   { event: "http", label, path, distinct_id, trace_id,
     source: "backend-a", operation_type: "route.handler",
     span_kind: "server", timestamp: at(8), latency_ms: 160,
@@ -176,7 +183,7 @@ trafficwar.capture([
 
 That trace renders as one journey: an edge station for `Checkout` with
 `https://app.example.com` as its caller, a backend station for `Checkout`
-served by `backend-a`, and three infrastructure stations beneath it.
+served by `backend-a`, and four infrastructure stations beneath it.
 
 A single-span request needs none of this. One `http` span with
 `span_kind: "server"` is a complete, valid event.
@@ -198,9 +205,24 @@ report, send the server span alone. A trace does not require an edge span.
 an allowlist of hostnames you expect and collapse the rest to a single value
 such as `web-other`, rather than forwarding arbitrary header content.
 
-There is no category for outbound third-party HTTP. A call your backend makes
-to another vendor's API is `event: "http"` with `span_kind: "client"`, which is
-the edge signature, so it renders on the edge tier beside your real callers.
+For an outbound third-party HTTP call, send `event: "external"` with
+`span_kind: "client"`. Keep the provider in `source` and the API action in
+`operation_type`:
+
+```ts
+trafficwar.capture({
+  event: "external",
+  source: "google-routes",
+  label: "Route planner",
+  span_kind: "client",
+  operation_type: "google.routes.compute",
+  latency_ms: 13,
+});
+```
+
+This creates a source-keyed infrastructure station. The incoming caller remains
+an `http` client span. If a request has no trusted `Origin` or `Referer`, use a
+stable value such as `web-direct`; never substitute your own API `Host` header.
 
 ## Actor identity and application errors
 

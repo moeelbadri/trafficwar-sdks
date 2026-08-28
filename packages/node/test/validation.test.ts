@@ -9,6 +9,7 @@ import {
   TRAFFICWAR_MAX_DECODED_BODY_BYTES,
 } from "../src";
 import type {
+  EventCategory,
   S3Source,
   TrafficWarEvent,
   TrafficWarFetch,
@@ -166,6 +167,32 @@ describe("TrafficWar event validation", () => {
 
     expect(sent[0]?.source).toBe("assets.ovh-s3");
     expect(sent[0]?.operation_type).toBe("s3.get_object");
+  });
+
+  it("preserves canonical external-service dependency events", async () => {
+    let sent: Array<Record<string, unknown>> = [];
+    const client = clientWith(async (_url, init) => {
+      sent = bodyEvents(init);
+      return success(init);
+    });
+    const event: EventCategory = "external";
+
+    client.capture({
+      event,
+      source: "google-routes",
+      label: "Route planner",
+      span_kind: "client",
+      operation_type: "google.routes.compute",
+    });
+    await client.close();
+
+    expect(sent[0]).toMatchObject({
+      event: "external",
+      source: "google-routes",
+      label: "Route planner",
+      span_kind: "client",
+      operation_type: "google.routes.compute",
+    });
   });
 
   it.each([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
