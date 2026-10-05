@@ -107,6 +107,16 @@ export interface TrafficWarOptions extends TrafficWarQueueOptions {
   baseUrl?: string | URL;
   /** Print batch lifecycle diagnostics without event payloads or credentials. */
   debug?: boolean;
+  /**
+   * At startup, statically scan application source for `capture()` calls and
+   * print each `event` and `label`. Defaults to `false`.
+   */
+  verbose?: boolean;
+  /**
+   * Directory scanned when `verbose` is true. Defaults to the process working
+   * directory.
+   */
+  catalogRoot?: string;
   timeoutMs?: number;
   maxRetries?: number;
   compression?: CompressionMode;

@@ -1,4 +1,7 @@
 import { Buffer } from "node:buffer";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import path from "node:path";
+import { tmpdir } from "node:os";
 import { gunzipSync } from "node:zlib";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -310,6 +313,7 @@ describe("TrafficWar queued capture", () => {
       TRAFFICWAR_DEFAULT_MAX_QUEUE_SIZE,
     );
     expect(client.debug).toBe(false);
+    expect(client.verbose).toBe(false);
     expect(client.compression).toBe("auto");
     expect(client.compressionThresholdBytes).toBe(1024);
   });
@@ -355,6 +359,83 @@ describe("TrafficWar queued capture", () => {
       expect(output).not.toContain("private-property");
     } finally {
       debug.mockRestore();
+    }
+  });
+
+  it("prints static events and labels at startup when verbose is enabled", () => {
+    const info = vi
+      .spyOn(console, "info")
+      .mockImplementation(() => undefined);
+    const directory = mkdtempSync(path.join(tmpdir(), "trafficwar-catalog-"));
+    try {
+      mkdirSync(path.join(directory, "src"));
+      writeFileSync(
+        path.join(directory, "src", "checkout.ts"),
+        `
+          trafficwar.capture({
+            event: "http",
+            label: "Checkout",
+          });
+        `,
+      );
+      const client = new TrafficWar({
+        apiKey: "tw_verbose_secret",
+        verbose: true,
+        catalogRoot: directory,
+        fetch: async (_url, init) => successResponse(init, "verbose"),
+      });
+
+      expect(client.verbose).toBe(true);
+      expect(info).toHaveBeenCalledTimes(1);
+      const output = String(info.mock.calls[0]?.[0]);
+      expect(output).toContain("[TrafficWar] static captures (1)");
+      expect(output).toContain("http  Checkout  src/checkout.ts:2");
+      expect(output).not.toContain("tw_verbose_secret");
+    } finally {
+      info.mockRestore();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("does not scan source when verbose is disabled", () => {
+    const info = vi
+      .spyOn(console, "info")
+      .mockImplementation(() => undefined);
+    try {
+      const client = new TrafficWar({
+        apiKey: "tw_quiet_catalog",
+        catalogRoot: "does-not-need-to-exist",
+        fetch: async (_url, init) => successResponse(init, "quiet-catalog"),
+      });
+      expect(client.verbose).toBe(false);
+      expect(info).not.toHaveBeenCalled();
+    } finally {
+      info.mockRestore();
+    }
+  });
+
+  it("keeps starting when the verbose catalog scan fails", () => {
+    const info = vi
+      .spyOn(console, "info")
+      .mockImplementation(() => undefined);
+    const directory = mkdtempSync(path.join(tmpdir(), "trafficwar-catalog-file-"));
+    const file = path.join(directory, "not-a-directory.txt");
+    writeFileSync(file, "capture({ event: 'http', label: 'Nope' })");
+    try {
+      const client = new TrafficWar({
+        apiKey: "tw_verbose_failed",
+        verbose: true,
+        catalogRoot: file,
+        fetch: async (_url, init) => successResponse(init, "verbose-failed"),
+      });
+      expect(client.verbose).toBe(true);
+      expect(String(info.mock.calls[0]?.[0])).toContain(
+        "static capture scan failed",
+      );
+      expect(String(info.mock.calls[0]?.[0])).not.toContain("tw_verbose_failed");
+    } finally {
+      info.mockRestore();
+      rmSync(directory, { recursive: true, force: true });
     }
   });
 

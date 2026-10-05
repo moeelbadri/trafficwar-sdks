@@ -21,6 +21,7 @@ import {
   serializeJson,
   type NormalizedEvent,
 } from "./validation";
+import { discoverCaptures, formatCaptureCatalog } from "./catalog";
 import { uuidv7 } from "./uuidv7";
 import packageMetadata from "../package.json" with { type: "json" };
 
@@ -183,6 +184,19 @@ function validateBooleanOption(
     );
   }
   return actual;
+}
+
+function validateCatalogRoot(value: unknown): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "string" || value.length === 0 || value.length > 4096) {
+    throw new TrafficWarValidationError(
+      "catalogRoot must be a non-empty path",
+      { path: "options.catalogRoot" },
+    );
+  }
+  return value;
 }
 
 function validateCompression(value: unknown): CompressionMode {
@@ -493,6 +507,7 @@ function parseSuccess(
 export class TrafficWar {
   readonly baseUrl: string;
   readonly debug: boolean;
+  readonly verbose: boolean;
   readonly timeoutMs: number;
   readonly maxRetries: number;
   readonly compression: CompressionMode;
@@ -531,6 +546,8 @@ export class TrafficWar {
     this.#apiKey = validateApiKey(options.apiKey);
     this.baseUrl = normalizeBaseUrl(options.baseUrl);
     this.debug = validateBooleanOption("debug", options.debug, false);
+    this.verbose = validateBooleanOption("verbose", options.verbose, false);
+    const catalogRoot = validateCatalogRoot(options.catalogRoot);
     this.timeoutMs = validateIntegerOption(
       "timeoutMs",
       options.timeoutMs,
@@ -592,7 +609,24 @@ export class TrafficWar {
       maxQueueSize: this.maxQueueSize,
       maxRetries: this.maxRetries,
       timeoutMs: this.timeoutMs,
+      verbose: this.verbose,
     });
+    if (this.verbose) {
+      this.#printCaptureCatalog(catalogRoot ?? process.cwd());
+    }
+  }
+
+  #printCaptureCatalog(root: string): void {
+    try {
+      console.info(formatCaptureCatalog(discoverCaptures(root)));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "unknown error";
+      try {
+        console.info(`[TrafficWar] static capture scan failed: ${message}`);
+      } catch {
+        // Diagnostics must never affect capture or delivery.
+      }
+    }
   }
 
   #debugLog(message: string, details: Record<string, unknown>): void {

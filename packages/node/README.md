@@ -89,6 +89,21 @@ const trafficwar = new TrafficWar({
 });
 ```
 
+Set `verbose: true` to print, once at startup, every `event` and `label` the
+SDK can see statically in `capture()` calls under the working directory (or
+`catalogRoot`). String literals are printed as written. A present value that
+is not a static string is printed as `<dynamic>`, and a missing one as
+`<missing>`. The scan skips `node_modules` and does not print payloads, API
+keys, or other properties. A scan failure is logged and does not stop the
+client.
+
+```ts
+const trafficwar = new TrafficWar({
+  apiKey: process.env.TRAFFICWAR_API_KEY!,
+  verbose: true,
+});
+```
+
 The SDK generates a process-monotonic RFC 9562 UUIDv7 `event_id` for each event
 that omits one. A caller may override it with any valid UUID. Caller-owned
 objects are never modified.
@@ -322,6 +337,10 @@ delivery still fails.
 - `baseUrl`: ingest origin. Defaults to `https://ingest.trafficwar.tech`.
 - `debug`: print safe batch lifecycle diagnostics with `console.debug`.
   Defaults to `false`.
+- `verbose`: at startup, statically scan source for `capture()` calls and
+  print each `event` and `label`. Defaults to `false`.
+- `catalogRoot`: directory scanned when `verbose` is true. Defaults to the
+  process working directory.
 - `timeoutMs`: timeout for each attempt. Defaults to 30,000 ms, safely above
   TrafficWar's 10-second durable acknowledgement window.
 - `maxRetries`: retries after the first attempt. Defaults to 3.

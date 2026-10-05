@@ -4,6 +4,14 @@ All notable changes to the TrafficWar server SDKs are documented here.
 
 ## Unreleased
 
+## 2.2.4 (Node.js) / Unreleased (Python) - 2026-10-06
+
+- Add `verbose: true`, which at client startup statically scans application
+  source for `capture()` calls and prints each `event` and `label`. Literal
+  strings are printed as written; other values are marked dynamic. The scan
+  is off by default, skips dependency directories, and never includes payloads
+  or API keys.
+
 ## 2.2.3 (Node.js) / Unreleased (Python) - 2026-08-28
 
 - Add `external` to the canonical `EventCategory` suggestions for outbound
