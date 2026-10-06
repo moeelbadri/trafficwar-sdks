@@ -21,7 +21,7 @@ import {
   serializeJson,
   type NormalizedEvent,
 } from "./validation";
-import { discoverCaptures, formatCaptureCatalog } from "./catalog";
+import { discoverCaptures, formatCaptureCatalog, formatCatalogIssues, type StaticCapture } from "./catalog";
 import { uuidv7 } from "./uuidv7";
 import packageMetadata from "../package.json" with { type: "json" };
 
@@ -508,6 +508,7 @@ export class TrafficWar {
   readonly baseUrl: string;
   readonly debug: boolean;
   readonly verbose: boolean;
+  readonly strictCatalog: boolean;
   readonly timeoutMs: number;
   readonly maxRetries: number;
   readonly compression: CompressionMode;
@@ -518,6 +519,10 @@ export class TrafficWar {
   readonly #apiKey: string;
   readonly #fetch: TrafficWarFetch;
   readonly #onError: TrafficWarErrorHandler | undefined;
+  readonly #captureEnabled: boolean;
+  #catalogPairs: Map<string, Set<string>> | undefined;
+  #catalogCaptures: StaticCapture[] | undefined;
+  #catalogRegistration: Promise<void> | undefined;
 
   readonly #queue: NormalizedEvent[] = [];
   readonly #pendingEventIds = new Set<string>();
@@ -547,6 +552,7 @@ export class TrafficWar {
     this.baseUrl = normalizeBaseUrl(options.baseUrl);
     this.debug = validateBooleanOption("debug", options.debug, false);
     this.verbose = validateBooleanOption("verbose", options.verbose, false);
+    this.strictCatalog = validateBooleanOption("strictCatalog", options.strictCatalog, true);
     const catalogRoot = validateCatalogRoot(options.catalogRoot);
     this.timeoutMs = validateIntegerOption(
       "timeoutMs",
@@ -611,21 +617,123 @@ export class TrafficWar {
       timeoutMs: this.timeoutMs,
       verbose: this.verbose,
     });
-    if (this.verbose) {
-      this.#printCaptureCatalog(catalogRoot ?? process.cwd());
+    this.#captureEnabled = this.verbose || this.strictCatalog
+      ? this.#initializeCaptureCatalog(catalogRoot ?? process.cwd())
+      : true;
+    if (this.#catalogCaptures) {
+      this.#catalogRegistration = this.#registerCatalog(this.#catalogCaptures).catch((error: unknown) => {
+        this.#debugLog("catalog registration failed", { errorName: error instanceof Error ? error.name : typeof error });
+        if (this.#onError) {
+          try { void Promise.resolve(this.#onError(error)).catch(() => undefined); }
+          catch { /* Error callbacks must never affect event delivery. */ }
+        }
+      });
     }
   }
 
-  #printCaptureCatalog(root: string): void {
+  /** False when strictCatalog disabled capture at startup; recreate after fixing source. */
+  get captureEnabled(): boolean {
+    return this.#captureEnabled;
+  }
+
+  #initializeCaptureCatalog(root: string): boolean {
+    let scan;
     try {
-      console.info(formatCaptureCatalog(discoverCaptures(root)));
+      scan = discoverCaptures(root);
     } catch (error) {
       const message = error instanceof Error ? error.message : "unknown error";
       try {
-        console.info(`[TrafficWar] static capture scan failed: ${message}`);
+        const prefix = this.strictCatalog ? "capture disabled by strictCatalog; " : "";
+        const output = `[TrafficWar] ${prefix}static capture scan failed: ${message}`;
+        if (this.strictCatalog) {
+          console.error(output);
+        } else {
+          console.info(output);
+        }
       } catch {
         // Diagnostics must never affect capture or delivery.
       }
+      return !this.strictCatalog;
+    }
+
+    const blocked = this.strictCatalog && (
+      scan.issues.length > 0 || scan.truncated || scan.captures.length === 0
+    );
+    if (!blocked && !scan.truncated && scan.issues.length === 0 && scan.captures.length > 0) {
+      this.#catalogCaptures = scan.captures;
+    }
+    if (this.strictCatalog && !blocked) {
+      this.#catalogPairs = new Map();
+      for (const { event, label } of scan.captures) {
+        let labels = this.#catalogPairs.get(event);
+        if (labels === undefined) {
+          labels = new Set();
+          this.#catalogPairs.set(event, labels);
+        }
+        labels.add(label);
+      }
+    }
+    try {
+      if (blocked) {
+        console.error(formatCatalogIssues(scan));
+      } else if (this.verbose) {
+        console.info(formatCaptureCatalog(scan));
+      }
+    } catch {
+      // A broken logger must not bypass strictCatalog or affect delivery.
+    }
+    return !blocked;
+  }
+
+  async #registerCatalog(captures: StaticCapture[]): Promise<void> {
+    // Never send source paths, locations, properties, or request identifiers.
+    const entries = [...new Map(captures.map(c => {
+      const entry = {
+        event: c.event, label: c.label, source: c.source ?? "",
+        span_kind: c.span_kind ?? "", operation_type: c.operation_type ?? "",
+        station_known: c.station_known !== false,
+      };
+      return [JSON.stringify(entry), entry] as const;
+    })).values()];
+    if (entries.length > 4000) {
+      throw new TrafficWarValidationError("Catalog exceeds 4000 captures", { path: "catalog" });
+    }
+    const init: RequestInit = {
+      method: "POST", redirect: "error",
+      headers: {
+        accept: "application/json", "content-type": "application/json",
+        authorization: `Bearer ${this.#apiKey}`,
+        "user-agent": `@trafficwar/node/${SDK_VERSION}`,
+        "x-trafficwar-sdk": `node/${SDK_VERSION}`,
+      },
+      body: JSON.stringify({ captures: entries }),
+    };
+    for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
+      let result: AttemptResult;
+      try {
+        result = await executeAttempt(this.#fetch, `${this.baseUrl}/v1/server/catalog`, init, undefined, this.timeoutMs);
+      } catch (error) {
+        if (attempt < this.maxRetries) { await sleep(retryDelayMs(attempt, undefined), undefined); continue; }
+        const failure = error instanceof AttemptTransportFailure ? error : new AttemptTransportFailure(error, false);
+        throw new TrafficWarConnectionError("Unable to register TrafficWar catalog", {
+          attempts: attempt + 1, timedOut: failure.timedOut, cause: failure.cause,
+        });
+      }
+      const parsed = parseBody(result.text);
+      if (result.response.ok) {
+        const record = asRecord(parsed.value);
+        const added = finiteNumber(record?.added);
+        if (record?.status !== "ok" || added === undefined || !Number.isSafeInteger(added) || added < 0 || added > entries.length) {
+          throw new TrafficWarProtocolError("TrafficWar returned an invalid catalog response", { status: result.response.status });
+        }
+        return;
+      }
+      const retryAfter = retryAfterSeconds(result.response, parsed);
+      if (RETRYABLE_STATUSES.has(result.response.status) && attempt < this.maxRetries && (retryAfter === undefined || retryAfter <= MAX_RETRY_AFTER_SECONDS)) {
+        await sleep(retryDelayMs(attempt, retryAfter), undefined);
+        continue;
+      }
+      throw new TrafficWarApiError(nonEmptyString(asRecord(parsed.value)?.error) ?? "Catalog registration failed", { status: result.response.status });
     }
   }
 
@@ -654,6 +762,9 @@ export class TrafficWar {
         "TrafficWar client is closing",
         { path: "client" },
       );
+    }
+    if (!this.#captureEnabled) {
+      return;
     }
 
     const isBatch = Array.isArray(eventOrEvents);
@@ -685,7 +796,17 @@ export class TrafficWar {
     const normalized: NormalizedEvent[] = [];
     for (let index = 0; index < events.length; index += 1) {
       const path = isBatch ? `events[${index}]` : "event";
-      normalized.push(normalizeEvent(events[index]!, path));
+      const event = normalizeEvent(events[index]!, path);
+      if (this.#catalogPairs !== undefined && (
+        typeof event.label !== "string" ||
+        !this.#catalogPairs.get(event.event)?.has(event.label)
+      )) {
+        throw new TrafficWarValidationError(
+          `${path} event/label pair is not in the strict startup catalog; use literal fields and restart the client`,
+          { path },
+        );
+      }
+      normalized.push(event);
     }
 
     for (const event of normalized) {
@@ -783,6 +904,7 @@ export class TrafficWar {
           }
         } while (this.#pendingCount > 0);
 
+        await this.#catalogRegistration;
         this.#clearTimer();
         this.#closed = true;
         this.#debugLog("client closed", {

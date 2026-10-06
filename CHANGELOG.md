@@ -4,6 +4,33 @@ All notable changes to the TrafficWar server SDKs are documented here.
 
 ## Unreleased
 
+## 3.0.0 (Node.js) / Unreleased (Python) - 2026-10-06
+
+- Register clean Node startup catalogs with the service-scoped catalog API
+  before traffic. Include static station metadata without source paths or
+  payloads; unresolved station metadata still supplies event/label choices.
+  Deduplicate declarations, retry registration independently of event delivery,
+  report failures through `onError`, and wait for registration during `close()`.
+  Registration is additive and does not automatically remove old declarations.
+- **Breaking:** enable Node `strictCatalog` protection by default: unresolved/empty/incomplete
+  startup scans disable capture with file/line diagnostics; successful scans
+  allowlist exact event/label pairs at runtime. Expose `captureEnabled`.
+  Application source must be deployed under `catalogRoot`; explicitly set
+  `strictCatalog: false` to retain previous unrestricted capture behavior.
+  Verbose and debug logging remain off by default.
+- Fix verbose catalog handling of overridden object fields, expressions after
+  type assertions, escaped literals, and traversal after a depth limit.
+  Escape control characters in printed events and labels.
+- Replace lexical matching with bundled AST binding analysis: resolve common
+  constants, shared objects, enums, assertions, and relative ESM imports;
+  recognize optional/bracket/bound calls, captureBatch, and template calls.
+  Ignore unrelated APIs, conventional tests, regex text, and proven-dead
+  branches; preserve uncertainty from mutations and unknown spreads. Add
+  aggregate source and resolution-work limits for synchronous startup scans.
+- Include Node integration guidance in the npm package's `AGENTS.md`, document
+  source-inventory limitations, and verify the inventory in packed ESM/CJS
+  consumer tests.
+
 ## 2.2.5 (Node.js) / Unreleased (Python) - 2026-10-06
 
 - The verbose startup catalog now lists a `capture()` call only when both

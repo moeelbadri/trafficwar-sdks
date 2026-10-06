@@ -56,6 +56,7 @@ export class GreetingService implements OnModuleDestroy {
     const statusCode = row ? 200 : 404;
 
     this.trafficwar.capture({
+      ...(row ? {} : { error: "Greeting not found" }),
       event: "http",
       distinct_id: name,
       path: "/hello/:name",
@@ -71,7 +72,6 @@ export class GreetingService implements OnModuleDestroy {
         message: row?.message ?? null,
         query_latency_ms: queryLatencyMs,
       },
-      ...(row ? {} : { error: "Greeting not found" }),
     });
 
     return row;

@@ -71,6 +71,7 @@ export function createApp(trafficwar: TrafficWar): ExpressExample {
     const statusCode = row ? 200 : 404;
 
     trafficwar.capture({
+      ...(row ? {} : { error: "Greeting not found" }),
       event: "http",
       distinct_id: request.params.name,
       path: "/hello/:name",
@@ -86,7 +87,6 @@ export function createApp(trafficwar: TrafficWar): ExpressExample {
         message: row?.message ?? null,
         query_latency_ms: queryLatencyMs,
       },
-      ...(row ? {} : { error: "Greeting not found" }),
     });
 
     if (!row) {

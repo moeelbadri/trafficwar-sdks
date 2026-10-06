@@ -42,6 +42,7 @@ function success(init: RequestInit): Response {
 function clientWith(fetch: TrafficWarFetch): TrafficWar {
   return new TrafficWar({
     apiKey: "tw_validation",
+    strictCatalog: false,
     compression: "none",
     fetch,
   });
@@ -97,6 +98,7 @@ describe("TrafficWar constructor validation", () => {
   it("accepts URL objects and canonicalizes trailing slashes", () => {
     const client = new TrafficWar({
       apiKey: "tw_key",
+      strictCatalog: false,
       baseUrl: new URL("https://example.com///"),
       fetch: async (_url, init) => success(init),
     });
@@ -314,6 +316,7 @@ describe("TrafficWar event validation", () => {
     let sent: Array<Record<string, unknown>> = [];
     const client = new TrafficWar({
       apiKey: "tw_default_ts",
+      strictCatalog: false,
       compression: "none",
       fetch: async (_url, init) => {
         sent = bodyEvents(init);
@@ -559,6 +562,7 @@ describe("TrafficWar array and queue validation", () => {
     const calls: RequestInit[] = [];
     const client = new TrafficWar({
       apiKey: "tw_atomic_cap",
+      strictCatalog: false,
       compression: "none",
       maxQueueSize: 3,
       fetch: async (_url, init) => {
@@ -582,6 +586,7 @@ describe("TrafficWar array and queue validation", () => {
     const fetch = vi.fn(async (_url, init) => success(init));
     const client = new TrafficWar({
       apiKey: "tw_wire_limit",
+      strictCatalog: false,
       compression: "none",
       fetch,
     });

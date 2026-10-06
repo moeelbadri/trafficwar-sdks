@@ -84,6 +84,26 @@ error `status_code` as shown above.
 Pass `debug: true` to the constructor to print safe batch lifecycle logs with
 `console.debug`. Debug logging is disabled by default.
 
+Node also supports `verbose: true` for a best-effort startup source inventory
+of fixed event/label pairs in TrafficWar `capture()` calls. It resolves common
+constants and relative ESM imports and excludes unrelated capture APIs and
+conventional tests. Use `catalogRoot` to choose the source directory; this
+does not discover framework routes. See the [Node README](packages/node/README.md)
+for supported syntax and remaining limits.
+
+Node's `strictCatalog` defaults to `true`: unresolved, empty, or incomplete
+startup scans disable capture, and runtime event/label pairs must match the
+catalog. Startup errors include file/line locations; `captureEnabled` exposes
+the result. Deploy application source under `catalogRoot`, not just compiled
+output. Explicit `strictCatalog: false` opts out of both protections and
+preserves the previous unrestricted capture behavior. Verbose and debug
+logging remain off by default.
+
+For AI-assisted integration, read the [Node agent guide](packages/node/AGENTS.md).
+It is included in the npm package as `node_modules/@trafficwar/node/AGENTS.md`.
+Link it from the application's own `AGENTS.md`; dependency guidance may not
+be loaded automatically.
+
 ## Synchronous Python
 
 ```bash

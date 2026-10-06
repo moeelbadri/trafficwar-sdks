@@ -109,13 +109,19 @@ export interface TrafficWarOptions extends TrafficWarQueueOptions {
   debug?: boolean;
   /**
    * At startup, statically scan application source for `capture()` calls and
-   * print each pair whose `event` and `label` are both fixed string literals.
-   * Calls with a dynamic or missing value are omitted. Defaults to `false`.
+   * print each pair whose `event` and `label` resolve to fixed strings.
+   * Calls with an unresolved or missing value are omitted. Defaults to `false`.
    */
   verbose?: boolean;
   /**
-   * Directory scanned when `verbose` is true. Defaults to the process working
-   * directory.
+   * Require a complete startup catalog of fixed event/label pairs. Unresolved,
+   * empty, or failed scans disable capture; unlisted runtime pairs are rejected.
+   * Defaults to true. Set false to opt out. Does not depend on verbose logging.
+   */
+  strictCatalog?: boolean;
+  /**
+   * Directory scanned when `verbose` or `strictCatalog` is true. Defaults to
+   * the process working directory.
    */
   catalogRoot?: string;
   timeoutMs?: number;
