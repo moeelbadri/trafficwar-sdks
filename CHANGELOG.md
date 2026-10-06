@@ -4,6 +4,12 @@ All notable changes to the TrafficWar server SDKs are documented here.
 
 ## Unreleased
 
+## 2.2.5 (Node.js) / Unreleased (Python) - 2026-10-06
+
+- The verbose startup catalog now lists a `capture()` call only when both
+  `event` and `label` are fixed string literals. Dynamic and missing values
+  are omitted instead of printed as placeholders.
+
 ## 2.2.4 (Node.js) / Unreleased (Python) - 2026-10-06
 
 - Add `verbose: true`, which at client startup statically scans application

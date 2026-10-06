@@ -207,11 +207,7 @@ function isSourceFile(name: string): boolean {
 }
 
 function clip(value: string): string {
-  if (
-    value === "<dynamic>" ||
-    value === "<missing>" ||
-    value.length <= MAX_LITERAL_CHARS
-  ) {
+  if (value.length <= MAX_LITERAL_CHARS) {
     return value;
   }
   return `${value.slice(0, MAX_LITERAL_CHARS - 3)}...`;
@@ -318,7 +314,6 @@ function parseObject(
   const line = lineAt(source, open);
   let event: string | undefined;
   let label: string | undefined;
-  let saw = false;
   let index = open + 1;
 
   while (index < limit) {
@@ -328,7 +323,7 @@ function parseObject(
     }
     if (source[index] === "}") {
       return {
-        row: saw ? finishRow(event, label, line) : undefined,
+        row: fixedCapture(event, label, line),
         next: index + 1,
       };
     }
@@ -348,46 +343,39 @@ function parseObject(
     }
     index = skipTrivia(source, key.next, limit);
     if (source[index] !== ":") {
-      if (key.name === "event" || key.name === "label") {
-        saw = true;
-        if (key.name === "event") {
-          event = "<dynamic>";
-        } else {
-          label = "<dynamic>";
-        }
+      if (key.name === "event") {
+        event = undefined;
+      } else if (key.name === "label") {
+        label = undefined;
       }
+      index = key.next;
       continue;
     }
 
     const value = readValue(source, index + 1, limit);
-    if (key.name === "event" || key.name === "label") {
-      saw = true;
-      const text = value.literal ?? "<dynamic>";
-      if (key.name === "event") {
-        event = text;
-      } else {
-        label = text;
-      }
+    if (key.name === "event") {
+      event = value.literal ?? undefined;
+    } else if (key.name === "label") {
+      label = value.literal ?? undefined;
     }
     index = value.next;
   }
 
   return {
-    row: saw ? finishRow(event, label, line) : undefined,
+    row: fixedCapture(event, label, line),
     next: index,
   };
 }
 
-function finishRow(
+function fixedCapture(
   event: string | undefined,
   label: string | undefined,
   line: number,
-): RawCapture {
-  return {
-    event: event ?? "<missing>",
-    label: label ?? "<missing>",
-    line,
-  };
+): RawCapture | undefined {
+  if (event === undefined || label === undefined) {
+    return undefined;
+  }
+  return { event, label, line };
 }
 
 function readKey(

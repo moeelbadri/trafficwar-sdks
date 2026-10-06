@@ -109,7 +109,8 @@ export interface TrafficWarOptions extends TrafficWarQueueOptions {
   debug?: boolean;
   /**
    * At startup, statically scan application source for `capture()` calls and
-   * print each `event` and `label`. Defaults to `false`.
+   * print each pair whose `event` and `label` are both fixed string literals.
+   * Calls with a dynamic or missing value are omitted. Defaults to `false`.
    */
   verbose?: boolean;
   /**

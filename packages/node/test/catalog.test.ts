@@ -77,34 +77,21 @@ describe("discoverCaptures", () => {
         line: 15,
       },
       {
-        event: "redis",
-        label: "<dynamic>",
-        file: "src/app.ts",
-        line: 16,
-      },
-      {
         event: "s3",
         label: "Checkout",
         file: "src/app.ts",
         line: 18,
       },
-      {
-        event: "external",
-        label: "<dynamic>",
-        file: "src/app.ts",
-        line: 19,
-      },
-      {
-        event: "<missing>",
-        label: "Only label",
-        file: "src/app.ts",
-        line: 23,
-      },
     ]);
 
     const printed = formatCaptureCatalog(scan);
-    expect(printed).toContain("[TrafficWar] static captures (6)");
+    expect(printed).toContain("[TrafficWar] static captures (3)");
     expect(printed).toContain("http  Checkout  src/app.ts:9");
+    expect(printed).not.toContain("redis");
+    expect(printed).not.toContain("external");
+    expect(printed).not.toContain("Only label");
+    expect(printed).not.toContain("<dynamic>");
+    expect(printed).not.toContain("<missing>");
     expect(printed).not.toContain("hidden");
     expect(printed).not.toContain("Ignored");
     expect(printed).not.toContain("nested");

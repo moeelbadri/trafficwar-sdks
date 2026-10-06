@@ -89,13 +89,13 @@ const trafficwar = new TrafficWar({
 });
 ```
 
-Set `verbose: true` to print, once at startup, every `event` and `label` the
-SDK can see statically in `capture()` calls under the working directory (or
-`catalogRoot`). String literals are printed as written. A present value that
-is not a static string is printed as `<dynamic>`, and a missing one as
-`<missing>`. The scan skips `node_modules` and does not print payloads, API
-keys, or other properties. A scan failure is logged and does not stop the
-client.
+Set `verbose: true` to print, once at startup, `capture()` calls whose
+`event` and `label` are both fixed string literals. The scan looks under the
+working directory, or `catalogRoot` when that is set. A call is omitted when
+either value is missing or computed (a variable, concatenation, or template
+with an expression). The scan skips `node_modules` and does not print
+payloads, API keys, or other properties. A scan failure is logged and does
+not stop the client.
 
 ```ts
 const trafficwar = new TrafficWar({
@@ -338,7 +338,8 @@ delivery still fails.
 - `debug`: print safe batch lifecycle diagnostics with `console.debug`.
   Defaults to `false`.
 - `verbose`: at startup, statically scan source for `capture()` calls and
-  print each `event` and `label`. Defaults to `false`.
+  print pairs whose `event` and `label` are both fixed string literals.
+  Dynamic or missing values are omitted. Defaults to `false`.
 - `catalogRoot`: directory scanned when `verbose` is true. Defaults to the
   process working directory.
 - `timeoutMs`: timeout for each attempt. Defaults to 30,000 ms, safely above
