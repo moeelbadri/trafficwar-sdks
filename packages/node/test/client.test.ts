@@ -1,14 +1,11 @@
 import { Buffer } from "node:buffer";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import path from "node:path";
-import { tmpdir } from "node:os";
 import { gunzipSync } from "node:zlib";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import packageMetadata from "../package.json" with { type: "json" };
 import {
-  TrafficWar,
+  TrafficWar as SDKTrafficWar,
   TrafficWarApiError,
   TrafficWarConnectionError,
   TrafficWarProtocolError,
@@ -23,7 +20,17 @@ import {
   TRAFFICWAR_MAX_COMPRESSED_BODY_BYTES,
   TRAFFICWAR_MAX_DECODED_BODY_BYTES,
 } from "../src";
-import type { TrafficWarFetch } from "../src";
+import type { TrafficWarFetch, TrafficWarOptions } from "../src";
+
+// These transport tests assert event batching only. Catalog HTTP behavior is
+// exercised independently by observedCatalog.test.ts with the real client.
+class TrafficWar extends SDKTrafficWar {
+  constructor(options: TrafficWarOptions) {
+    super({ ...options, fetch: async (url, init) => url.endsWith("/catalog")
+      ? makeResponse({ status: "ok", added: 0 })
+      : (options.fetch ?? globalThis.fetch)(url, init) });
+  }
+}
 
 interface ResponseOptions {
   status?: number;
@@ -123,7 +130,6 @@ describe("TrafficWar queued capture", () => {
     const calls: RecordedCall[] = [];
     const client = new TrafficWar({
       apiKey: "tw_test_key",
-      strictCatalog: false,
       compression: "none",
       fetch: async (url, init) => {
         calls.push({ url, init });
@@ -185,7 +191,6 @@ describe("TrafficWar queued capture", () => {
     const calls: RequestInit[] = [];
     const client = new TrafficWar({
       apiKey: "tw_batch",
-      strictCatalog: false,
       baseUrl: "http://localhost:47317///",
       compression: "none",
       fetch: async (_url, init) => {
@@ -218,7 +223,6 @@ describe("TrafficWar queued capture", () => {
     let sent: Array<Record<string, unknown>> = [];
     const client = new TrafficWar({
       apiKey: "tw_snapshot",
-      strictCatalog: false,
       compression: "none",
       fetch: async (_url, init) => {
         sent = decodedEvents(init);
@@ -253,7 +257,6 @@ describe("TrafficWar queued capture", () => {
     let sent: Array<Record<string, unknown>> = [];
     const client = new TrafficWar({
       apiKey: "tw_ids",
-      strictCatalog: false,
       compression: "none",
       fetch: async (_url, init) => {
         sent = decodedEvents(init);
@@ -284,7 +287,6 @@ describe("TrafficWar queued capture", () => {
     const calls: RequestInit[] = [];
     const client = new TrafficWar({
       apiKey: "tw_gzip",
-      strictCatalog: false,
       compression: "gzip",
       fetch: async (_url, init) => {
         calls.push(init);
@@ -305,7 +307,6 @@ describe("TrafficWar queued capture", () => {
   it("exposes queue and transport defaults", () => {
     const client = new TrafficWar({
       apiKey: "tw_defaults",
-      strictCatalog: false,
       fetch: async (_url, init) => successResponse(init, "unused"),
     });
 
@@ -331,7 +332,6 @@ describe("TrafficWar queued capture", () => {
     try {
       const client = new TrafficWar({
         apiKey: "tw_debug_secret",
-        strictCatalog: false,
         compression: "none",
         debug: true,
         fetch: async (_url, init) => successResponse(init, "debug"),
@@ -369,85 +369,6 @@ describe("TrafficWar queued capture", () => {
     }
   });
 
-  it("prints static events and labels at startup when verbose is enabled", () => {
-    const info = vi
-      .spyOn(console, "info")
-      .mockImplementation(() => undefined);
-    const directory = mkdtempSync(path.join(tmpdir(), "trafficwar-catalog-"));
-    try {
-      mkdirSync(path.join(directory, "src"));
-      writeFileSync(
-        path.join(directory, "src", "checkout.ts"),
-        `import { TrafficWar } from '@trafficwar/node'; const trafficwar = new TrafficWar({apiKey:'test'});
-          trafficwar.capture({
-            event: "http",
-            label: "Checkout",
-          });
-        `,
-      );
-      const client = new TrafficWar({
-        apiKey: "tw_verbose_secret",
-        verbose: true,
-        catalogRoot: directory,
-        fetch: async (_url, init) => successResponse(init, "verbose"),
-      });
-
-      expect(client.verbose).toBe(true);
-      expect(info).toHaveBeenCalledTimes(1);
-      const output = String(info.mock.calls[0]?.[0]);
-      expect(output).toContain("[TrafficWar] static captures (1)");
-      expect(output).toContain("http  Checkout  src/checkout.ts:2");
-      expect(output).not.toContain("tw_verbose_secret");
-    } finally {
-      info.mockRestore();
-      rmSync(directory, { recursive: true, force: true });
-    }
-  });
-
-  it("does not scan source when both verbose and strictCatalog are disabled", () => {
-    const info = vi
-      .spyOn(console, "info")
-      .mockImplementation(() => undefined);
-    try {
-      const client = new TrafficWar({
-        apiKey: "tw_quiet_catalog",
-        strictCatalog: false,
-        catalogRoot: "does-not-need-to-exist",
-        fetch: async (_url, init) => successResponse(init, "quiet-catalog"),
-      });
-      expect(client.verbose).toBe(false);
-      expect(info).not.toHaveBeenCalled();
-    } finally {
-      info.mockRestore();
-    }
-  });
-
-  it("keeps starting when the verbose catalog scan fails", () => {
-    const info = vi
-      .spyOn(console, "info")
-      .mockImplementation(() => undefined);
-    const directory = mkdtempSync(path.join(tmpdir(), "trafficwar-catalog-file-"));
-    const file = path.join(directory, "not-a-directory.txt");
-    writeFileSync(file, "capture({ event: 'http', label: 'Nope' })");
-    try {
-      const client = new TrafficWar({
-        apiKey: "tw_verbose_failed",
-        strictCatalog: false,
-        verbose: true,
-        catalogRoot: file,
-        fetch: async (_url, init) => successResponse(init, "verbose-failed"),
-      });
-      expect(client.verbose).toBe(true);
-      expect(String(info.mock.calls[0]?.[0])).toContain(
-        "static capture scan failed",
-      );
-      expect(String(info.mock.calls[0]?.[0])).not.toContain("tw_verbose_failed");
-    } finally {
-      info.mockRestore();
-      rmSync(directory, { recursive: true, force: true });
-    }
-  });
-
   it("does not print diagnostics when debug is disabled", async () => {
     const debug = vi
       .spyOn(console, "debug")
@@ -455,7 +376,6 @@ describe("TrafficWar queued capture", () => {
     try {
       const client = new TrafficWar({
         apiKey: "tw_quiet",
-        strictCatalog: false,
         compression: "none",
         fetch: async (_url, init) => successResponse(init, "quiet"),
       });
@@ -478,7 +398,6 @@ describe("TrafficWar queued capture", () => {
     const unref = vi.spyOn(prototype, "unref");
     const client = new TrafficWar({
       apiKey: "tw_unref",
-      strictCatalog: false,
       compression: "none",
       fetch: async (_url, init) => successResponse(init, "unref"),
     });
@@ -489,200 +408,12 @@ describe("TrafficWar queued capture", () => {
   });
 });
 
-describe("TrafficWar strict catalog", () => {
-  const directories: string[] = [];
-  const sdkBinding = "import { TrafficWar } from '@trafficwar/node'; const client = new TrafficWar({apiKey:'test'}); ";
-  const cleanSource = [
-    'client.capture({ event: "http", label: "Checkout" });',
-    'client.capture({ event: "database", label: "Profile" });',
-  ].join("\n");
-
-  function fixture(source: string) {
-    const root = mkdtempSync(path.join(tmpdir(), "trafficwar-strict-"));
-    directories.push(root);
-    writeFileSync(path.join(root, "app.ts"), sdkBinding + source);
-    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    const fetch = vi.fn(async (url: string, init: RequestInit) => url.endsWith('/catalog')
-      ? makeResponse({ status: "ok", added: 0 }) : successResponse(init));
-    return { root, error, fetch };
-  }
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-    for (const directory of directories.splice(0)) {
-      rmSync(directory, { recursive: true, force: true });
-    }
-  });
-
-  it("defaults to strict protection without verbose, prints locations once, and never sends", async () => {
-    vi.useFakeTimers();
-    const { root, error, fetch } = fixture(cleanSource + '\nclient.capture({ event: "http", label: routeName });');
-    const client = new TrafficWar({ apiKey: "strict-secret", catalogRoot: root, fetch });
-    expect(client.strictCatalog).toBe(true);
-    expect(client.verbose).toBe(false);
-    expect(client.captureEnabled).toBe(false);
-    expect(Reflect.set(client, "captureEnabled", true)).toBe(false);
-    expect(client.captureEnabled).toBe(false);
-    expect(error).toHaveBeenCalledTimes(1);
-    const output = String(error.mock.calls[0]?.[0]);
-    expect(output).toContain("capture disabled by strictCatalog");
-    expect(output).toContain("app.ts:3: label missing or not a statically resolved string");
-    expect(output).not.toContain("strict-secret");
-    expect(output).not.toContain("routeName");
-    client.capture({ event: "http", label: "Checkout" });
-    client.captureBatch([{ event: "http", label: "Other" }]);
-    await vi.advanceTimersByTimeAsync(2000);
-    expect(await client.flush()).toEqual({ accepted: 0, batches: [] });
-    expect(await client.close()).toEqual({ accepted: 0, batches: [] });
-    expect(fetch).not.toHaveBeenCalled();
-    expect(error).toHaveBeenCalledTimes(1);
-  });
-
-  it("scans process.cwd() by default and enforces the catalog without printing inventory", async () => {
-    const { root, fetch, error } = fixture(cleanSource);
-    vi.spyOn(process, "cwd").mockReturnValue(root);
-    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
-    const client = new TrafficWar({ apiKey: "strict-default-root", fetch });
-    expect(client.strictCatalog).toBe(true);
-    expect(client.captureEnabled).toBe(true);
-    expect(client.verbose).toBe(false);
-    expect(client.debug).toBe(false);
-    expect(error).not.toHaveBeenCalled();
-    expect(info).not.toHaveBeenCalled();
-    expect(() => client.capture({ event: "http", label: "Unknown" })).toThrow(TrafficWarValidationError);
-    client.capture({ event: "http", label: "Checkout" });
-    expect((await client.close()).accepted).toBe(1);
-    expect(fetch).toHaveBeenCalledTimes(2);
-  });
-
-  it("allows only exact pairs, rejects an entire mixed batch, and preserves valid queued traffic", async () => {
-    const { root, fetch } = fixture(cleanSource);
-    const client = new TrafficWar({ apiKey: "strict-pairs", catalogRoot: root, fetch, compression: "none" });
-    expect(client.strictCatalog).toBe(true);
-    expect(client.captureEnabled).toBe(true);
-    client.capture({ event: "database", label: "Profile", latency_ms: 12.5, properties: { id: "request-123" } });
-    // Both strings occur in the catalog, but this pair does not.
-    expect(() => client.capture([
-      { event: "http", label: "Checkout" },
-      { event: "http", label: "Profile" },
-    ])).toThrow(/events\[1\].*not in the strict startup catalog/);
-    expect(() => client.capture({ event: "http" })).toThrow(TrafficWarValidationError);
-    expect(() => client.capture({ event: "http", label: "Checkout-123" })).toThrow(TrafficWarValidationError);
-    const result = await client.close();
-    expect(result.accepted).toBe(1);
-    expect(fetch).toHaveBeenCalledTimes(2);
-    expect(decodedEvents(fetch.mock.calls[1]![1])).toEqual([
-      expect.objectContaining({ event: "database", label: "Profile", latency_ms: 12.5, properties: { id: "request-123" } }),
-    ]);
-  });
-
-  it("registers a deduplicated catalog before traffic and close waits for it", async () => {
-    const { root } = fixture([
-      'client.capture({event:"s3",label:"Upload",source:"assets.ovh-s3",operation_type:"s3.put_object"});',
-      'client.capture({event:"s3",label:"Upload",source:"assets.ovh-s3",operation_type:"s3.put_object"});',
-      'client.capture({event:"http",label:"Home",source:process.env.HOST,span_kind:"server"});',
-    ].join("\n"));
-    const pending = deferred<Response>();
-    const calls: RecordedCall[] = [];
-    const client = new TrafficWar({ apiKey:"catalog-secret", catalogRoot:root, fetch:async (url, init) => {
-      calls.push({url,init}); return pending.promise;
-    } });
-    expect(calls).toHaveLength(1);
-    expect(calls[0]!.url).toBe(`${TRAFFICWAR_DEFAULT_BASE_URL}/v1/server/catalog`);
-    expect(requestHeaders(calls[0]!.init).get("authorization")).toBe("Bearer catalog-secret");
-    expect(JSON.parse(String(calls[0]!.init.body))).toEqual({ captures: [
-      {event:"s3",label:"Upload",source:"assets.ovh-s3",span_kind:"",operation_type:"s3.put_object",station_known:true},
-      {event:"http",label:"Home",source:"",span_kind:"server",operation_type:"",station_known:false},
-    ] });
-    expect(String(calls[0]!.init.body)).not.toContain(root);
-    expect(String(calls[0]!.init.body)).not.toContain("app.ts");
-    let closed = false;
-    const closing = client.close().then(result => { closed = true; return result; });
-    await Promise.resolve(); await Promise.resolve();
-    expect(closed).toBe(false);
-    pending.resolve(makeResponse({status:"ok",added:2}));
-    expect(await closing).toEqual({accepted:0,batches:[]});
-    expect(calls).toHaveLength(1);
-  });
-
-  it("retries registration independently and reports final failure without blocking events", async () => {
-    vi.useFakeTimers();
-    const { root } = fixture(cleanSource);
-    const onError = vi.fn();
-    const fetch = vi.fn(async (url: string, init: RequestInit) => url.endsWith('/catalog')
-      ? makeResponse({status:"error",error:"unavailable"}, {status:503}) : successResponse(init));
-    const client = new TrafficWar({apiKey:"catalog-retry",catalogRoot:root,maxRetries:1,fetch,onError});
-    client.capture({event:"http",label:"Checkout"});
-    expect((await client.flush()).accepted).toBe(1);
-    expect(client.captureEnabled).toBe(true);
-    await vi.advanceTimersByTimeAsync(1000);
-    await client.close();
-    expect(fetch.mock.calls.filter(([url])=>url.endsWith('/catalog'))).toHaveLength(2);
-    expect(fetch.mock.calls.filter(([url])=>url.endsWith('/batch'))).toHaveLength(1);
-    expect(onError).toHaveBeenCalledTimes(1);
-    expect(onError.mock.calls[0]![0]).toBeInstanceOf(TrafficWarApiError);
-  });
-
-  it.each(["empty", "missing-root", "incomplete"])("disables capture for a %s scan", async (kind) => {
-    const { root, fetch, error } = fixture(kind === "empty" ? "export const ready = true;" : cleanSource);
-    if (kind === "incomplete") {
-      writeFileSync(path.join(root, "large.ts"), " ".repeat(512 * 1024 + 1));
-    }
-    const client = new TrafficWar({
-      apiKey: "strict-scan",
-      catalogRoot: kind === "missing-root" ? path.join(root, "missing") : root,
-      fetch,
-    });
-    expect(client.captureEnabled).toBe(false);
-    expect(error).toHaveBeenCalledTimes(1);
-    client.capture({ event: "http", label: "Checkout" });
-    await client.close();
-    expect(fetch).not.toHaveBeenCalled();
-  });
-
-  it.each([false, true])("explicit opt-out accepts unresolved identities with verbose=%s", async (verbose) => {
-    const { root, fetch } = fixture('client.capture({ event: "http", label: routeName });');
-    vi.spyOn(console, "info").mockImplementation(() => undefined);
-    const client = new TrafficWar({ apiKey: "verbose-only", strictCatalog: false, verbose, catalogRoot: root, fetch });
-    expect(client.captureEnabled).toBe(true);
-    expect(client.strictCatalog).toBe(false);
-    client.capture({ event: "http", label: "Actual label" });
-    expect((await client.close()).accepted).toBe(1);
-    expect(fetch).toHaveBeenCalledTimes(1);
-  });
-
-  it("retains full pair values even when diagnostic text is clipped", async () => {
-    const label = "x".repeat(256) + "tail";
-    const { root, fetch } = fixture(`client.capture({ event: "http", label: ${JSON.stringify(label)} });`);
-    const client = new TrafficWar({ apiKey: "strict-full-label", strictCatalog: true, catalogRoot: root, fetch });
-    client.capture({ event: "http", label });
-    expect((await client.close()).accepted).toBe(1);
-  });
-
-  it("a broken logger cannot bypass a blocked catalog or block a clean one", async () => {
-    const { root, error, fetch } = fixture('client.capture(eventObject);');
-    error.mockImplementation(() => { throw new Error("broken logger"); });
-    const blocked = new TrafficWar({ apiKey: "strict-logger", strictCatalog: true, catalogRoot: root, fetch });
-    expect(blocked.captureEnabled).toBe(false);
-    blocked.capture({ event: "http", label: "Checkout" });
-    await blocked.close();
-    expect(fetch).not.toHaveBeenCalled();
-    writeFileSync(path.join(root, "app.ts"), sdkBinding + cleanSource);
-    vi.spyOn(console, "info").mockImplementation(() => { throw new Error("broken logger"); });
-    const clean = new TrafficWar({ apiKey: "strict-logger", strictCatalog: true, verbose: true, catalogRoot: root, fetch });
-    expect(clean.captureEnabled).toBe(true);
-    clean.capture({ event: "http", label: "Checkout" });
-    expect((await clean.close()).accepted).toBe(1);
-  });
-});
-
 describe("TrafficWar automatic batching", () => {
   it("uses one 1000 ms timer from the first pending event", async () => {
     vi.useFakeTimers();
     const calls: RequestInit[] = [];
     const client = new TrafficWar({
       apiKey: "tw_timer",
-      strictCatalog: false,
       compression: "none",
       fetch: async (_url, init) => {
         calls.push(init);
@@ -707,7 +438,6 @@ describe("TrafficWar automatic batching", () => {
     const gate = deferred<Response>();
     const client = new TrafficWar({
       apiKey: "tw_threshold",
-      strictCatalog: false,
       compression: "none",
       fetch: async (_url, init) => {
         calls.push(init);
@@ -736,7 +466,6 @@ describe("TrafficWar automatic batching", () => {
     const keys: string[] = [];
     const client = new TrafficWar({
       apiKey: "tw_chunks",
-      strictCatalog: false,
       compression: "none",
       fetch: async (_url, init) => {
         sizes.push(decodedEvents(init).length);
@@ -767,7 +496,6 @@ describe("TrafficWar automatic batching", () => {
     let accepted = 0;
     const client = new TrafficWar({
       apiKey: "tw_large_queue",
-      strictCatalog: false,
       compression: "none",
       maxQueueSize: eventCount,
       fetch: async (_url, init) => {
@@ -793,7 +521,6 @@ describe("TrafficWar automatic batching", () => {
     const calls: RequestInit[] = [];
     const client = new TrafficWar({
       apiKey: "tw_wire_split",
-      strictCatalog: false,
       compression: "none",
       fetch: async (_url, init) => {
         calls.push(init);
@@ -822,7 +549,6 @@ describe("TrafficWar automatic batching", () => {
     const calls: RequestInit[] = [];
     const client = new TrafficWar({
       apiKey: "tw_decoded_split",
-      strictCatalog: false,
       compression: "gzip",
       fetch: async (_url, init) => {
         calls.push(init);
@@ -852,7 +578,6 @@ describe("TrafficWar automatic batching", () => {
     const first = deferred<Response>();
     const client = new TrafficWar({
       apiKey: "tw_singleflight",
-      strictCatalog: false,
       compression: "none",
       fetch: async (_url, init) => {
         calls.push(init);
@@ -885,7 +610,6 @@ describe("TrafficWar automatic batching", () => {
     let call: RequestInit | undefined;
     const client = new TrafficWar({
       apiKey: "tw_cap",
-      strictCatalog: false,
       compression: "none",
       maxQueueSize: 2,
       fetch: async (_url, init) => {
@@ -915,7 +639,6 @@ describe("TrafficWar automatic batching", () => {
     let calls = 0;
     const client = new TrafficWar({
       apiKey: "tw_inflight_id",
-      strictCatalog: false,
       compression: "none",
       fetch: async (_url, init) => {
         calls += 1;
@@ -950,7 +673,6 @@ describe("TrafficWar failures and idempotency", () => {
     const calls: RequestInit[] = [];
     const client = new TrafficWar({
       apiKey: "tw_retry",
-      strictCatalog: false,
       compression: "gzip",
       maxRetries: 2,
       fetch: async (_url, init) => {
@@ -989,7 +711,6 @@ describe("TrafficWar failures and idempotency", () => {
     let fail = true;
     const client = new TrafficWar({
       apiKey: "tw_background_failure",
-      strictCatalog: false,
       compression: "none",
       maxRetries: 0,
       onError: (error) => {
@@ -1037,7 +758,6 @@ describe("TrafficWar failures and idempotency", () => {
     });
     const client = new TrafficWar({
       apiKey: "tw_async_on_error",
-      strictCatalog: false,
       compression: "none",
       maxRetries: 0,
       onError,
@@ -1075,7 +795,6 @@ describe("TrafficWar failures and idempotency", () => {
     });
     const client = new TrafficWar({
       apiKey: "tw_sync_on_error",
-      strictCatalog: false,
       compression: "none",
       maxRetries: 0,
       onError,
@@ -1101,7 +820,6 @@ describe("TrafficWar failures and idempotency", () => {
     const calls: RequestInit[] = [];
     const client = new TrafficWar({
       apiKey: "tw_background_retry",
-      strictCatalog: false,
       compression: "none",
       maxRetries: 0,
       fetch: async (_url, init) => {
@@ -1139,7 +857,6 @@ describe("TrafficWar failures and idempotency", () => {
     let calls = 0;
     const client = new TrafficWar({
       apiKey: "tw_manual_failure",
-      strictCatalog: false,
       compression: "none",
       maxRetries: 0,
       fetch: async (_url, init) => {
@@ -1172,7 +889,6 @@ describe("TrafficWar failures and idempotency", () => {
     let fail = true;
     const client = new TrafficWar({
       apiKey: "tw_failed_id",
-      strictCatalog: false,
       compression: "none",
       maxRetries: 0,
       fetch: async (_url, init) =>
@@ -1209,7 +925,6 @@ describe("TrafficWar failures and idempotency", () => {
       let calls = 0;
       const client = new TrafficWar({
         apiKey: "tw_status",
-        strictCatalog: false,
         compression: "none",
         maxRetries: 1,
         fetch: async (_url, init) => {
@@ -1236,7 +951,6 @@ describe("TrafficWar failures and idempotency", () => {
     let calls = 0;
     const client = new TrafficWar({
       apiKey: "tw_retry_after",
-      strictCatalog: false,
       compression: "none",
       maxRetries: 1,
       fetch: async (_url, init) => {
@@ -1277,7 +991,6 @@ describe("TrafficWar failures and idempotency", () => {
     };
     const client = new TrafficWar({
       apiKey: "tw_quota",
-      strictCatalog: false,
       maxRetries: 10,
       fetch: async (_url, init) => {
         calls += 1;
@@ -1321,7 +1034,6 @@ describe("TrafficWar failures and idempotency", () => {
     let malformed = true;
     const client = new TrafficWar({
       apiKey: "tw_protocol",
-      strictCatalog: false,
       maxRetries: 0,
       fetch: async (_url, init) =>
         malformed
@@ -1344,7 +1056,6 @@ describe("TrafficWar failures and idempotency", () => {
     let calls = 0;
     const client = new TrafficWar({
       apiKey: "tw_bound",
-      strictCatalog: false,
       maxRetries: 3,
       fetch: async (_url, init) => {
         calls += 1;
@@ -1373,7 +1084,6 @@ describe("TrafficWar lifecycle", () => {
   it("manual flush returns an empty compact result when there is no work", async () => {
     const client = new TrafficWar({
       apiKey: "tw_empty",
-      strictCatalog: false,
       fetch: async (_url, init) => successResponse(init, "unused"),
     });
 
@@ -1387,7 +1097,6 @@ describe("TrafficWar lifecycle", () => {
     let calls = 0;
     const client = new TrafficWar({
       apiKey: "tw_close",
-      strictCatalog: false,
       compression: "none",
       fetch: async (_url, init) => {
         calls += 1;
@@ -1412,7 +1121,6 @@ describe("TrafficWar lifecycle", () => {
     const calls: RequestInit[] = [];
     const client = new TrafficWar({
       apiKey: "tw_closing",
-      strictCatalog: false,
       compression: "none",
       fetch: async (_url, init) => {
         calls.push(init);
@@ -1447,7 +1155,6 @@ describe("TrafficWar lifecycle", () => {
     const calls: RequestInit[] = [];
     const client = new TrafficWar({
       apiKey: "tw_close_singleflight",
-      strictCatalog: false,
       compression: "none",
       fetch: async (_url, init) => {
         calls.push(init);
@@ -1473,7 +1180,6 @@ describe("TrafficWar lifecycle", () => {
     const calls: RequestInit[] = [];
     const client = new TrafficWar({
       apiKey: "tw_close_retry",
-      strictCatalog: false,
       compression: "none",
       maxRetries: 0,
       fetch: async (_url, init) => {

@@ -34,7 +34,6 @@
     "dist",
     "README.md",
     "AGENTS.md",
-    "THIRD-PARTY-NOTICES.md",
     "LICENSE"
   ],
   "sideEffects": false,
@@ -59,9 +58,6 @@
     "server"
   ],
   "devDependencies": {
-    "@babel/parser": "7.29.9",
-    "@babel/traverse": "7.29.8",
-    "@types/babel__traverse": "7.28.0",
     "@types/node": "^22.20.1",
     "tsup": "8.5.1",
     "typescript": "^5.9.3",

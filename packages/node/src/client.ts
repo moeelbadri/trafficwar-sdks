@@ -21,7 +21,7 @@ import {
   serializeJson,
   type NormalizedEvent,
 } from "./validation";
-import { discoverCaptures, formatCaptureCatalog, formatCatalogIssues, type StaticCapture } from "./catalog";
+import { ObservedCatalog, type CatalogPair } from "./observedCatalog";
 import { uuidv7 } from "./uuidv7";
 import packageMetadata from "../package.json" with { type: "json" };
 
@@ -184,19 +184,6 @@ function validateBooleanOption(
     );
   }
   return actual;
-}
-
-function validateCatalogRoot(value: unknown): string | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  if (typeof value !== "string" || value.length === 0 || value.length > 4096) {
-    throw new TrafficWarValidationError(
-      "catalogRoot must be a non-empty path",
-      { path: "options.catalogRoot" },
-    );
-  }
-  return value;
 }
 
 function validateCompression(value: unknown): CompressionMode {
@@ -508,7 +495,6 @@ export class TrafficWar {
   readonly baseUrl: string;
   readonly debug: boolean;
   readonly verbose: boolean;
-  readonly strictCatalog: boolean;
   readonly timeoutMs: number;
   readonly maxRetries: number;
   readonly compression: CompressionMode;
@@ -519,10 +505,7 @@ export class TrafficWar {
   readonly #apiKey: string;
   readonly #fetch: TrafficWarFetch;
   readonly #onError: TrafficWarErrorHandler | undefined;
-  readonly #captureEnabled: boolean;
-  #catalogPairs: Map<string, Set<string>> | undefined;
-  #catalogCaptures: StaticCapture[] | undefined;
-  #catalogRegistration: Promise<void> | undefined;
+  readonly #catalog: ObservedCatalog;
 
   readonly #queue: NormalizedEvent[] = [];
   readonly #pendingEventIds = new Set<string>();
@@ -530,6 +513,7 @@ export class TrafficWar {
   #preparedBatch: PreparedBatch | undefined;
   #timer: ReturnType<typeof setTimeout> | undefined;
   #drainPromise: Promise<FlushResult> | undefined;
+  #flushPromise: Promise<FlushResult> | undefined;
   #backgroundPromise: Promise<FlushResult> | undefined;
   #backgroundScheduled = false;
   #closePromise: Promise<FlushResult> | undefined;
@@ -552,8 +536,6 @@ export class TrafficWar {
     this.baseUrl = normalizeBaseUrl(options.baseUrl);
     this.debug = validateBooleanOption("debug", options.debug, false);
     this.verbose = validateBooleanOption("verbose", options.verbose, false);
-    this.strictCatalog = validateBooleanOption("strictCatalog", options.strictCatalog, true);
-    const catalogRoot = validateCatalogRoot(options.catalogRoot);
     this.timeoutMs = validateIntegerOption(
       "timeoutMs",
       options.timeoutMs,
@@ -617,87 +599,24 @@ export class TrafficWar {
       timeoutMs: this.timeoutMs,
       verbose: this.verbose,
     });
-    this.#captureEnabled = this.verbose || this.strictCatalog
-      ? this.#initializeCaptureCatalog(catalogRoot ?? process.cwd())
-      : true;
-    if (this.#catalogCaptures) {
-      this.#catalogRegistration = this.#registerCatalog(this.#catalogCaptures).catch((error: unknown) => {
-        this.#debugLog("catalog registration failed", { errorName: error instanceof Error ? error.name : typeof error });
-        if (this.#onError) {
-          try { void Promise.resolve(this.#onError(error)).catch(() => undefined); }
-          catch { /* Error callbacks must never affect event delivery. */ }
-        }
-      });
-    }
-  }
-
-  /** False when strictCatalog disabled capture at startup; recreate after fixing source. */
-  get captureEnabled(): boolean {
-    return this.#captureEnabled;
-  }
-
-  #initializeCaptureCatalog(root: string): boolean {
-    let scan;
-    try {
-      scan = discoverCaptures(root);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "unknown error";
-      try {
-        const prefix = this.strictCatalog ? "capture disabled by strictCatalog; " : "";
-        const output = `[TrafficWar] ${prefix}static capture scan failed: ${message}`;
-        if (this.strictCatalog) {
-          console.error(output);
-        } else {
-          console.info(output);
-        }
-      } catch {
-        // Diagnostics must never affect capture or delivery.
-      }
-      return !this.strictCatalog;
-    }
-
-    const blocked = this.strictCatalog && (
-      scan.issues.length > 0 || scan.truncated || scan.captures.length === 0
+    this.#catalog = new ObservedCatalog(
+      entries => this.#registerCatalog(entries),
+      error => this.#reportCatalogError(error),
+      this.verbose,
     );
-    if (!blocked && !scan.truncated && scan.issues.length === 0 && scan.captures.length > 0) {
-      this.#catalogCaptures = scan.captures;
-    }
-    if (this.strictCatalog && !blocked) {
-      this.#catalogPairs = new Map();
-      for (const { event, label } of scan.captures) {
-        let labels = this.#catalogPairs.get(event);
-        if (labels === undefined) {
-          labels = new Set();
-          this.#catalogPairs.set(event, labels);
-        }
-        labels.add(label);
-      }
-    }
-    try {
-      if (blocked) {
-        console.error(formatCatalogIssues(scan));
-      } else if (this.verbose) {
-        console.info(formatCaptureCatalog(scan));
-      }
-    } catch {
-      // A broken logger must not bypass strictCatalog or affect delivery.
-    }
-    return !blocked;
   }
 
-  async #registerCatalog(captures: StaticCapture[]): Promise<void> {
-    // Never send source paths, locations, properties, or request identifiers.
-    const entries = [...new Map(captures.map(c => {
-      const entry = {
-        event: c.event, label: c.label, source: c.source ?? "",
-        span_kind: c.span_kind ?? "", operation_type: c.operation_type ?? "",
-        station_known: c.station_known !== false,
-      };
-      return [JSON.stringify(entry), entry] as const;
-    })).values()];
-    if (entries.length > 4000) {
-      throw new TrafficWarValidationError("Catalog exceeds 4000 captures", { path: "catalog" });
+  #reportCatalogError(error: unknown): void {
+    if (this.#onError) {
+      try { void Promise.resolve(this.#onError(error)).catch(() => undefined); }
+      catch { /* Error callbacks must not affect capture. */ }
+    } else {
+      try { console.error("[TrafficWar] catalog registration failed; event delivery continues. Configure onError for details."); }
+      catch { /* Logging must not affect capture. */ }
     }
+  }
+
+  async #registerCatalog(entries: CatalogPair[]): Promise<void> {
     const init: RequestInit = {
       method: "POST", redirect: "error",
       headers: {
@@ -751,6 +670,10 @@ export class TrafficWar {
   capture(
     eventOrEvents: TrafficWarEvent | readonly TrafficWarEvent[],
   ): void {
+    this.#capture(eventOrEvents);
+  }
+
+  #capture(eventOrEvents: TrafficWarEvent | readonly TrafficWarEvent[]): void {
     if (this.#closed) {
       throw new TrafficWarValidationError(
         "TrafficWar client is closed",
@@ -763,10 +686,6 @@ export class TrafficWar {
         { path: "client" },
       );
     }
-    if (!this.#captureEnabled) {
-      return;
-    }
-
     const isBatch = Array.isArray(eventOrEvents);
     if (isBatch && eventOrEvents.length === 0) {
       throw new TrafficWarValidationError(
@@ -797,15 +716,6 @@ export class TrafficWar {
     for (let index = 0; index < events.length; index += 1) {
       const path = isBatch ? `events[${index}]` : "event";
       const event = normalizeEvent(events[index]!, path);
-      if (this.#catalogPairs !== undefined && (
-        typeof event.label !== "string" ||
-        !this.#catalogPairs.get(event.event)?.has(event.label)
-      )) {
-        throw new TrafficWarValidationError(
-          `${path} event/label pair is not in the strict startup catalog; use literal fields and restart the client`,
-          { path },
-        );
-      }
       normalized.push(event);
     }
 
@@ -832,6 +742,8 @@ export class TrafficWar {
       }
       incomingEventIds.add(eventId);
     }
+
+    this.#catalog.observe(normalized);
 
     for (const event of normalized) {
       this.#queue.push(event);
@@ -864,7 +776,7 @@ export class TrafficWar {
         { path: "events" },
       );
     }
-    this.capture(events);
+    this.#capture(events);
   }
 
   flush(): Promise<FlushResult> {
@@ -874,8 +786,14 @@ export class TrafficWar {
     if (this.#closePromise) {
       return this.#closePromise;
     }
+    if (this.#flushPromise) return this.#flushPromise;
     this.#clearTimer();
-    return this.#startDrain();
+    const drain = this.#startDrain();
+    const flushing = drain.finally(() => this.#catalog.flush()).finally(() => {
+      if (this.#flushPromise === flushing) this.#flushPromise = undefined;
+    });
+    this.#flushPromise = flushing;
+    return flushing;
   }
 
   close(): Promise<FlushResult> {
@@ -904,7 +822,7 @@ export class TrafficWar {
           }
         } while (this.#pendingCount > 0);
 
-        await this.#catalogRegistration;
+        await this.#catalog.close();
         this.#clearTimer();
         this.#closed = true;
         this.#debugLog("client closed", {
@@ -913,6 +831,7 @@ export class TrafficWar {
         });
         return { accepted, batches };
       } finally {
+        if (!this.#closed) await this.#catalog.flush();
         if (this.#closePromise === closing) {
           this.#closePromise = undefined;
         }

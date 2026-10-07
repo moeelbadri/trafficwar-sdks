@@ -10,36 +10,60 @@ application. Installing the package alone does not capture requests.
 - Create one long-lived `TrafficWar` client per service/API key, not per
   request. Load the key from a server-side environment variable. Never send
   it to a browser or commit it.
-- `strictCatalog` defaults to true. Deploy application source and set
-  `catalogRoot` to include instrumentation and its relative imports. Check
-  `captureEnabled` after construction; startup issues disable all sending.
-  Do not silently opt out to hide scanner issues. Use `strictCatalog: false`
-  only when the application intentionally accepts unrestricted identities
-  or cannot deploy scannable source.
 - `capture(event)` and `capture([events])` validate, snapshot, and enqueue
   synchronously and return `void`. They do not acknowledge durable delivery.
-- A clean startup scan uploads fixed declarations to `/v1/server/catalog`
-  independently of events; `close()` waits for that registration too. The panel
-  preloads stations and event/label choices from this service-scoped catalog.
-  Keep station `source`, `span_kind`, and `operation_type` statically resolvable
-  to preload them. Unresolved metadata registers the pair with
-  `station_known: false` and waits for live traffic to identify its station.
-  No source paths, payloads, latency, clients, or lanes are registered. Catalog
-  writes replace that service's stored list; pairs missing from the upload are deleted.
-  Registration failures use `onError` without blocking event capture. Both
-  `strictCatalog: false` and `verbose: false` disable scanning/registration.
-- The scan includes all recognized TrafficWar calls under `catalogRoot`, not
-  only one client instance's calls. Use separate per-service source roots when
-  an application contains clients for different service keys.
 - Automatic batching starts after one second or at 10,000 pending events;
   the default queue bound is 100,000 unacknowledged events. Validation and
   queue overflow can throw; do not let instrumentation replace an
   application's response or hide its original error.
-- Supply `onError` to observe background delivery failures. Await `close()`
-  at graceful shutdown or the end of a short-lived job; do not close or flush
-  the shared client on every request. Do not exit before shutdown finishes.
+- Supply `onError` to observe background delivery and catalog failures. Await
+  `close()` at graceful shutdown or the end of a short-lived job; do not close
+  or flush the shared client on every request. Do not exit before shutdown finishes.
 - Omit `event_id` to use the generated UUIDv7. Do not reuse IDs across
   distinct events. Spans share `trace_id`, not `event_id`.
+
+## Automatic observed pairs
+
+- Accepted captures automatically discover exact event/label pairs. Captured
+  values are never rewritten or pinned to a code location. A shared wrapper
+  can send different categories and labels on every call, as can batch slots.
+- Only an entire call that passes event validation, duplicate-ID checks and
+  queue capacity teaches pairs. Missing labels and strings unsuitable for the
+  catalog do not block otherwise valid event delivery. Event validation is
+  unchanged: supplied non-string labels are still invalid event fields.
+- Register only non-blank event/label strings, at most 128 Unicode code points
+  each, with no control characters. Preserve case and whitespace exactly;
+  identity is the pair, not a concatenation of its values or their cross product.
+- One in-memory sent/pending list belongs to each client. New pairs coalesce
+  for a fixed 1-second window, not a resetting debounce. Uploads serialize,
+  send unsent deltas only and mark sent only after a successful response.
+  Repeated captures and concurrent flush calls do not create duplicate uploads.
+- Bearer-authenticated `POST /v1/server/catalog` sends only
+  `{ captures: [{ event, label, station_known: false }] }`. The backend adds
+  and deduplicates rather than replacing the service list. Actual events supply
+  station metadata; declarations do not create traffic, clients, latency or lanes.
+- No AST/source scanning, explicit declarations, strict/static switches,
+  captureEnabled getter, location pinning, filesystem access, JSON persistence,
+  API polling, startup registration or wrapper-first-value rewriting exists.
+  Do not invent fake captures to register pairs. Python does not register pairs.
+- Registration reuses bounded transport retries/timeouts. Failures report
+  safely through `onError` and retain pending pairs. Automatic retry cycles
+  use exponential cooldowns from 1 s up to 30 s; captures and flush calls cannot
+  bypass a cooldown. Without `onError`, a generic error is printed.
+- `flush()` awaits current catalog uploads and sends eligible pending pairs,
+  bypassing the initial coalescing window but not a failure cooldown. `close()`
+  does the same, then stops catalog timers. Catalog failures never reject event
+  delivery; counts returned by flush/close are event-only. Failed pending pairs
+  can be lost on close or abrupt process exit; there is no durable catalog log.
+- Sent pairs remain remembered for the lifetime of that client. Deleting one
+  on the server does not clear SDK memory; after SDK restart it can reappear
+  when observed again. Independent clients/replicas may upload the same pair;
+  the additive server deduplicates them. No complete-list coordination is needed.
+- Use stable low-cardinality names: client memory grows with distinct observed
+  pairs. Uploads are chunked to 4,000 pairs, but the backend's service capacity
+  still applies; permanent errors remain pending on cooldown until close.
+- `debug` keeps safe delivery diagnostics. `verbose` logs only successfully
+  registered new pairs, not source inventory or every capture. Both default off.
 
 ## Stable event identity
 
@@ -102,63 +126,3 @@ trafficwar.capture({
 - Errors require `status_code >= 400`, non-empty `error`, or non-empty
   `error_code`. Put stack traces in `properties`. Properties alone do not
   mark an event as an error; redact secrets before capture.
-
-## Startup inventory is best-effort diagnostics
-
-- `verbose: true` prints a source inventory at client construction;
-  `debug: true` separately prints batch lifecycle logs. Both default to off.
-- The AST inventory resolves literals, unchanged constant bindings, shorthand
-  fields, shared objects/arrays, static spreads/computed keys, string enums,
-  TypeScript assertions, and concatenations/templates with fixed inputs.
-  Relative ESM imports and reexports within the scan root are resolved too.
-- Calls must belong to TrafficWar: import/require `@trafficwar/node`, construct
-  the client, or annotate an injected client/parameter with its imported
-  `TrafficWar` type. A variable named `client` alone is not evidence. Prefer
-  direct SDK calls with explicit stable identities inside framework hooks;
-  do not hide identity selection behind opaque wrappers.
-- Optional/bracket calls, simple `.bind(client)` aliases, `captureBatch`,
-  `.call`/`.apply`, and calls inside template expressions are recognized.
-  The scanner never runs application code to determine values.
-- Runtime values, opaque function results, parameter-derived identities,
-  TypeScript path aliases, dynamic imports, and CommonJS local export graphs
-  are not generally resolved. Mutated objects or objects passed to unknown
-  code are treated conservatively; unknown spreads/keys can override literals.
-- Set `catalogRoot` to the application source directory. The scan defaults
-  to `process.cwd()`, runs synchronously per client, and skips dependencies,
-  build output (`dist`, `build`, `.next`, etc.), declarations, `test`/`tests`/
-  `__tests__`, and `*.test.*`/`*.spec.*`. Symlinks are skipped and mark the
-  scan incomplete. Limits: 4,000 files, depth 12, 512 KiB/file, 16 MiB total
-  source, 128 resolution levels, and 100,000 value evaluations.
-- Other libraries' `capture` APIs and branches proven unreachable are ignored.
-  Conditions requiring runtime information and unused function bodies remain
-  scanned. This is bounded binding analysis, not a full TypeScript checker or
-  whole-program proof; an empty catalog does not prove missing instrumentation.
-- No standalone CLI, framework route enumeration, or Python equivalent is
-  provided. Do not claim the startup list is an exhaustive event catalog or
-  proof that any listed event has been sent.
-
-## Default protection: strictCatalog
-
-- `strictCatalog: true` is the default and requires fixed event/label
-  identities with source available at `catalogRoot`. It works independently
-  of `verbose`; verbose and debug output remain disabled by default.
-- Explicit `strictCatalog: false` disables the startup gate and runtime
-  allowlist. With verbose also off, no source scan runs. This opt-out preserves
-  the previous unrestricted capture behavior; it is not a warning-only guard.
-- Any missing/unresolved fields, failed or incomplete scan, or empty catalog
-  sets `captureEnabled` to false. Startup prints file/line issues with
-  `console.error`; subsequent capture calls enqueue nothing and the client
-  sends nothing. Fix the issues and recreate the client to enable capture.
-- Unresolved does not mean proven dynamic. Use literals or statically
-  resolvable constants for event/label fields. Keep all required relative
-  imports inside `catalogRoot`; parse failures or missing local imports also
-  disable capture. Tests in nonstandard locations can still be scanned.
-- Put runtime-dependent object spreads before explicit `event` and `label`
-  fields so those identities cannot be overridden by an unresolved spread.
-- A clean catalog becomes a runtime pair allowlist. An unlisted event/label
-  throws `TrafficWarValidationError`, rejecting the entire capture call.
-  Previously queued valid events are still delivered. Catch instrumentation
-  errors where needed to preserve application responses.
-- Do not restrict dynamic timestamps, measured durations, IDs, or properties.
-  This guard bounds event/label values; it cannot prove source provenance for
-  a computed runtime value that happens to equal a permitted pair.

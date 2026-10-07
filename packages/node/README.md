@@ -53,11 +53,10 @@ request.
 enqueues the input synchronously, then returns `void`; it does not return an
 `IngestResult` or wait for the network.
 
-**Strict catalog protection is enabled by default.** Application source must
-be available under `catalogRoot` (default: `process.cwd()`). Startup catalog
-issues disable capture without preventing the application from starting.
-See [Default event/label protection](#default-eventlabel-protection) before
-deploying a source-free build or upgrading an existing integration.
+**Accepted captures automatically register observed event/label pairs.** Values
+are never rewritten, including calls through shared wrappers. Registration is
+memory-only, sends unsent deltas and has no startup inventory, source scanning
+or persistence. See [Automatic observed event/label registration](#automatic-observed-eventlabel-registration).
 
 `Date` timestamps are serialized as RFC3339 without changing the caller's
 object. String timestamps must be RFC3339; numeric timestamps are integer epoch
@@ -99,142 +98,62 @@ const trafficwar = new TrafficWar({
 });
 ```
 
-Set `verbose: true` to print, once per client at startup, `capture()` calls whose
-`event` and `label` resolve to fixed strings. The scan looks under the
-working directory, or `catalogRoot` when that is set. A call is omitted when
-either value is missing or unresolved. The scan skips `node_modules` and does not print
-payloads, API keys, or other properties. Scanning runs by default because
-strict protection is enabled; verbose only controls inventory output. A scan
-failure is logged and disables capture unless `strictCatalog: false` is set.
+### Automatic observed event/label registration
 
 ```ts
 const trafficwar = new TrafficWar({
   apiKey: process.env.TRAFFICWAR_API_KEY!,
-  verbose: true,
 });
+
+function captureWork(event: string, label: string, latency_ms: number) {
+  trafficwar.capture({ event, label, latency_ms });
+}
+captureWork("database", "Checkout", 12);
+captureWork("redis", "Different label", 29);
+// Emits database / Checkout and redis / Different label, unchanged.
 ```
 
-This is a best-effort source inventory, not a complete list of instrumented
-routes or proof of delivery. AST binding analysis recognizes literals, unchanged
-constant bindings, shorthand, shared objects/arrays, static spreads and keys,
-string enums, TypeScript assertions, and concatenations/templates with fixed
-inputs. Relative ESM imports/reexports inside the root are resolved. The
-scanner never executes application code.
-
-Calls are attributed to imports/require of `@trafficwar/node`, constructed
-clients, aliases, and injected clients with an imported `TrafficWar` type.
-Optional/bracket calls, simple `.bind(client)` aliases, `captureBatch`,
-`.call`/`.apply`, and calls inside template expressions are recognized.
-Other libraries' `capture` methods, comments/regex text, conventional tests,
-and branches proven unreachable are ignored. Runtime-dependent branches and
-unused function bodies remain scanned; this is not whole-program reachability.
-
-Opaque function results, wrapper parameters, TypeScript path aliases, dynamic
-imports, and CommonJS local export graphs are not generally resolved. Unknown
-spreads/keys can override preceding literals. Mutated objects and objects
-passed to opaque code are treated conservatively, even if their declarations
-use `const`. Type annotations alone do not prove that identities are static.
-
-Scanning is synchronous and bounded to 4,000 source files, depth 12, and
-512 KiB per file, with a 16 MiB total source budget, 128 resolution levels,
-and 100,000 value evaluations. Declarations, `test`/`tests`/`__tests__`, and
-`*.test.*`/`*.spec.*` are skipped, along with symlinks and build directories
-such as `dist`, `build`, and `.next`. The parser is bundled at build time;
-the package still has no npm runtime dependencies. Point `catalogRoot` at available application
-source; a production image containing only build output can print an empty
-catalog. No standalone inventory CLI or framework route discovery is included.
-
-### Register the startup catalog
-
-A complete, non-empty source scan registers its deduplicated declarations with
-`POST /v1/server/catalog` in the background at construction, before any request
-is captured. Authentication uses the same service API key. The wire contains
-only `event`, `label`, statically resolved `source`, `span_kind`,
-`operation_type`, and `station_known`; source files, line numbers, paths to the
-scan root, properties, and request identifiers are never uploaded.
-
-The panel reads `GET /panel/api/catalog?service=<service_id>` to preload idle
-SpaceWar stations and event/label choices. API-key callers can also read
-`GET /v1/server/catalog`, pinned to their key's service. Declarations are not
-events and do not create traffic, clients, latency samples, or map lanes.
-Registration merges idempotently per service, so replicas and separate apps
-cannot erase one another's declarations. Removed declarations are not deleted
-automatically. The API accepts at most 4,000 distinct declarations per service.
-
-The scan includes all recognized TrafficWar calls under `catalogRoot`; it does
-not attribute calls to individual client instances. Applications with multiple
-service keys should use separate per-service source roots to avoid registering
-another service's declarations.
-
-Dynamic station metadata is omitted and marked `station_known: false`: the
-event/label pair still populates selectors, but the station waits for real
-traffic. Missing optional fields use the same defaults as ingest. The map
-keeps its existing station/instance limits and folds overflow into `other`.
-
-Registration uses the client's bounded retries and timeout. Failures go to
-`onError` and never disable event delivery. `close()` also waits for registration;
-its accepted count remains event-only. Empty, failed, incomplete, or blocked
-scans do not upload. Setting both `strictCatalog: false` and `verbose: false`
-opts out of scanning and registration; verbose-only mode registers only clean,
-complete scans. Python does not yet register a catalog.
-
-### Default event/label protection
-
-`strictCatalog` defaults to `true` and disables capture if the startup scan finds any
-missing or unresolved `event`/`label`. The SDK prints the affected file and
-object/argument line with `console.error`, even when `verbose` is off. A
-failed, incomplete, or empty scan also disables capture. The application can
-still start: `client.captureEnabled` is `false`, capture calls enqueue
-nothing, and `flush()`/`close()` return zero accepted events without sending.
-Fix the source and recreate the client; there is no automatic rescan.
-
-```ts
-const trafficwar = new TrafficWar({
-  apiKey: process.env.TRAFFICWAR_API_KEY!,
-  strictCatalog: true,
-  catalogRoot: "./src",
-  verbose: true, // Optional: also print the catalog when the check passes.
-});
-```
-
-An example startup error is:
-
-```text
-[TrafficWar] capture disabled by strictCatalog; fix these issues and restart the client:
-  checkout.ts:42: label missing or not a statically resolved string
-```
-
-If the scan passes, capture accepts only exact event/label pairs in that
-startup catalog. An unlisted pair throws `TrafficWarValidationError` before
-any events from that call are queued; already queued valid events remain
-deliverable. Catch instrumentation validation errors at the application's
-boundary if they must not affect request handling. Dynamic timestamps,
-durations, actor IDs, paths, and properties are not restricted by this guard.
-
-This is deliberately conservative, not proof that a value changes at runtime:
-unsupported expressions and opaque wrapper arguments remain unresolved.
-Point `catalogRoot` at the instrumented application source, including required
-relative imports. Source must be present; skipped symlinks, missing local
-imports, parse errors, and unreadable/oversized files make the scan incomplete.
-The scanner cannot establish the provenance of runtime values; a computed value
-equal to an allowed pair can pass the runtime check. `strictCatalog` defaults
-to `true`, while `verbose` and `debug` remain `false`. Python has no equivalent.
-
-This default changes existing integrations: source-free builds, missing labels,
-or unsupported/unresolved instrumentation will stop sending until the source
-is fixed or the application deliberately opts out. To retain the previous
-unrestricted capture behavior, explicitly set:
-
-```ts
-const trafficwar = new TrafficWar({
-  apiKey: process.env.TRAFFICWAR_API_KEY!,
-  strictCatalog: false,
-});
-```
-
-Opting out disables both startup blocking and the runtime pair allowlist.
-With verbose also off, no source scan runs; with verbose on, the inventory
-remains diagnostics only and never blocks capture.
+- Accepted captures discover exact pairs; values are never rewritten, including
+  shared wrappers and reordered batch slots. Failed validation, duplicate IDs
+  and queue rejection never teach any pairs.
+- One long-lived client keeps one sent/pending pair list in memory. New pairs
+  coalesce for a fixed 1-second window, not a resetting debounce. Uploads are
+  serialized; repeats and concurrent flushes cannot duplicate an in-flight POST.
+  Uploads contain only unsent deltas, marked sent only after success.
+- `POST /v1/server/catalog` uses the same Bearer key and sends only
+  `{ captures: [{ event, label, station_known: false }] }`. No station metadata,
+  source locations, properties or identifiers are uploaded. Actual events supply
+  station metadata. The backend adds/deduplicates instead of replacing the
+  service list, so replicas do not need complete-list coordination.
+- Registration requires non-blank strings of at most 128 Unicode code points
+  without controls. Case and whitespace are preserved exactly. Missing labels,
+  empty/blank labels, overly long strings and control-containing strings are
+  skipped for catalog purposes but do not block otherwise valid events. Event
+  validation remains unchanged (a supplied non-string label is not valid).
+- There is no source scanning, explicit catalog, strict/static switch,
+  capture-location pinning, filesystem access, JSON persistence, API polling,
+  startup registration or first-value rewriting. Remove obsolete `catalog`,
+  `catalogRoot`, `catalogFile`, `strictCatalog`, `staticCatalog` options and use
+  neither `TrafficWarCatalogEntry` nor `captureEnabled`; these APIs are removed.
+  Do not send fake traffic to register pairs. Python does not register pairs.
+- Catalog uploads reuse the client's bounded transport retries and timeout.
+  On failure, `onError` is called safely; pending pairs remain in memory and
+  automatic retry cycles back off from 1 s up to 30 s. Captures and repeated
+  flushes cannot bypass the cooldown. Without `onError`, a generic error prints.
+- `flush()` awaits catalog uploads and sends eligible pending deltas, bypassing
+  the initial window, but not a failure cooldown. `close()` also awaits work
+  and stops catalog timers. Catalog failures do not reject event delivery or
+  alter its accepted count. A failed pending registration can be lost on close
+  or abrupt exit; there is no durable catalog log or unbounded shutdown retry.
+- Sent pairs stay in memory for that client's lifetime. Removing a pair on
+  the server does not clear this memory; after SDK restart it can reappear when
+  observed again. Independent clients can upload the same pair; the server
+  deduplicates it. Use one client per service/key, not one per request.
+- Keep identities low-cardinality: memory grows with distinct observed pairs.
+  Uploads are chunked at 4,000 entries; the backend service capacity still
+  applies. Permanent errors remain pending on cooldown until close.
+- `verbose: true` logs successful new-pair registrations only, never a source
+  inventory or every capture. Debug and verbose remain off by default.
 
 The SDK generates a process-monotonic RFC 9562 UUIDv7 `event_id` for each event
 that omits one. A caller may override it with any valid UUID. Caller-owned
@@ -469,14 +388,7 @@ delivery still fails.
 - `baseUrl`: ingest origin. Defaults to `https://ingest.trafficwar.tech`.
 - `debug`: print safe batch lifecycle diagnostics with `console.debug`.
   Defaults to `false`.
-- `verbose`: at startup, statically scan source for `capture()` calls and
-  print pairs whose `event` and `label` resolve to fixed strings.
-  Unresolved or missing values are omitted. Defaults to `false`.
-- `strictCatalog`: disable capture on unresolved/empty/incomplete source scans
-  and reject runtime pairs outside the startup catalog. Defaults to `true`;
-  explicitly set `false` to opt out.
-- `catalogRoot`: directory scanned when `verbose` or `strictCatalog` is true.
-  Defaults to the process working directory.
+- `verbose`: log successfully registered new pairs. Defaults to `false`.
 - `timeoutMs`: timeout for each attempt. Defaults to 30,000 ms, safely above
   TrafficWar's 10-second durable acknowledgement window.
 - `maxRetries`: retries after the first attempt. Defaults to 3.
@@ -485,7 +397,7 @@ delivery still fails.
 - `flushIntervalMs`: delay from the first pending event to automatic flush.
   Defaults to 1,000 ms.
 - `maxQueueSize`: maximum unacknowledged events. Defaults to 100,000.
-- `onError`: optional callback for automatic background delivery errors.
+- `onError`: optional callback for automatic delivery and catalog errors.
 - `fetch`: injected Fetch-compatible function, primarily for testing.
 
 The SDK sends `Content-Type: application/json`, `Authorization: Bearer ...`, a

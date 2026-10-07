@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { type TestContext } from "node:test";
 
 import {
   TrafficWar,
@@ -11,15 +11,30 @@ import { createApp } from "../src/app.js";
 
 type CapturedEvent = Record<string, unknown>;
 
-function createTestClient(): {
+function createTestClient(t: TestContext): {
   trafficwar: TrafficWar;
   events: CapturedEvent[];
 } {
   const events: CapturedEvent[] = [];
+  const errors: unknown[] = [];
+  let catalogs = 0;
+  t.after(() => {
+    assert.equal(catalogs, 1);
+    assert.deepEqual(errors, []);
+  });
   let requests = 0;
   const fakeFetch: TrafficWarFetch = async (input, init) => {
     const url = new URL(input);
     assert.equal(url.origin, "https://ingest.test");
+    if (url.pathname === "/v1/server/catalog") {
+      assert.equal(init.method, "POST");
+      assert.equal(new Headers(init.headers).get("authorization"), "Bearer test-api-key");
+      assert.deepEqual(JSON.parse(String(init.body)), { captures: [{
+        event: "http", label: "GET /hello/:name", station_known: false,
+      }] });
+      catalogs++;
+      return new Response(JSON.stringify({ status: "ok", added: 1 }));
+    }
     assert.equal(url.pathname, "/v1/server/batch");
     assert.equal(init.method, "POST");
 
@@ -65,6 +80,7 @@ function createTestClient(): {
     trafficwar: new TrafficWar({
       apiKey: "test-api-key",
       baseUrl: "https://ingest.test",
+      onError: error => { errors.push(error); },
       fetch: fakeFetch,
       timeoutMs: 1_000,
       maxRetries: 0,
@@ -91,8 +107,8 @@ function assertCommonEvent(
   assert.ok(Number.isFinite(event.latency_ms));
 }
 
-test("queries SQLite and captures successful and missing greetings", async () => {
-  const { trafficwar, events } = createTestClient();
+test("queries SQLite and captures successful and missing greetings", async t => {
+  const { trafficwar, events } = createTestClient(t);
   const example = createApp(trafficwar);
 
   try {
@@ -154,6 +170,9 @@ test("responds before delivery and flush surfaces a rejected batch", async () =>
     apiKey: "test-api-key",
     baseUrl: "https://ingest.test",
     fetch: async (input, init) => {
+      if (new URL(input).pathname === "/v1/server/catalog") {
+        return new Response(JSON.stringify({ status: "ok", added: 1 }));
+      }
       assert.equal(new URL(input).pathname, "/v1/server/batch");
       assert.ok(init.body instanceof Uint8Array);
       const payload: unknown = JSON.parse(

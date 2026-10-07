@@ -3,7 +3,7 @@ import { Buffer } from "node:buffer";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
-  TrafficWar,
+  TrafficWar as SDKTrafficWar,
   TrafficWarValidationError,
   TRAFFICWAR_MAX_COMPRESSED_BODY_BYTES,
   TRAFFICWAR_MAX_DECODED_BODY_BYTES,
@@ -15,6 +15,20 @@ import type {
   TrafficWarFetch,
   TrafficWarOptions,
 } from "../src";
+
+// Isolate existing event validation/transport assertions from catalog HTTP.
+class TrafficWar extends SDKTrafficWar {
+  constructor(options: TrafficWarOptions) {
+    if (!options || typeof options !== "object" || Array.isArray(options)
+      || (options.fetch !== undefined && typeof options.fetch !== "function")) {
+      super(options);
+      return;
+    }
+    super({ ...options, fetch: async (url, init) => url.endsWith("/catalog")
+      ? new Response(JSON.stringify({ status: "ok", added: 0 }))
+      : (options.fetch ?? globalThis.fetch)(url, init) });
+  }
+}
 
 function bodyEvents(init: RequestInit): Array<Record<string, unknown>> {
   if (!(init.body instanceof Uint8Array)) {
@@ -42,7 +56,6 @@ function success(init: RequestInit): Response {
 function clientWith(fetch: TrafficWarFetch): TrafficWar {
   return new TrafficWar({
     apiKey: "tw_validation",
-    strictCatalog: false,
     compression: "none",
     fetch,
   });
@@ -98,7 +111,6 @@ describe("TrafficWar constructor validation", () => {
   it("accepts URL objects and canonicalizes trailing slashes", () => {
     const client = new TrafficWar({
       apiKey: "tw_key",
-      strictCatalog: false,
       baseUrl: new URL("https://example.com///"),
       fetch: async (_url, init) => success(init),
     });
@@ -316,7 +328,6 @@ describe("TrafficWar event validation", () => {
     let sent: Array<Record<string, unknown>> = [];
     const client = new TrafficWar({
       apiKey: "tw_default_ts",
-      strictCatalog: false,
       compression: "none",
       fetch: async (_url, init) => {
         sent = bodyEvents(init);
@@ -562,7 +573,6 @@ describe("TrafficWar array and queue validation", () => {
     const calls: RequestInit[] = [];
     const client = new TrafficWar({
       apiKey: "tw_atomic_cap",
-      strictCatalog: false,
       compression: "none",
       maxQueueSize: 3,
       fetch: async (_url, init) => {
@@ -586,7 +596,6 @@ describe("TrafficWar array and queue validation", () => {
     const fetch = vi.fn(async (_url, init) => success(init));
     const client = new TrafficWar({
       apiKey: "tw_wire_limit",
-      strictCatalog: false,
       compression: "none",
       fetch,
     });

@@ -98,7 +98,7 @@ export interface TrafficWarQueueOptions {
   flushIntervalMs?: number;
   /** Maximum number of unacknowledged events held by this client. */
   maxQueueSize?: number;
-  /** Receives errors from automatic background flushes. */
+  /** Receives automatic event-delivery and catalog-registration errors. */
   onError?: TrafficWarErrorHandler;
 }
 
@@ -107,23 +107,8 @@ export interface TrafficWarOptions extends TrafficWarQueueOptions {
   baseUrl?: string | URL;
   /** Print batch lifecycle diagnostics without event payloads or credentials. */
   debug?: boolean;
-  /**
-   * At startup, statically scan application source for `capture()` calls and
-   * print each pair whose `event` and `label` resolve to fixed strings.
-   * Calls with an unresolved or missing value are omitted. Defaults to `false`.
-   */
+  /** Log successfully registered new event/label pairs. Defaults to false. */
   verbose?: boolean;
-  /**
-   * Require a complete startup catalog of fixed event/label pairs. Unresolved,
-   * empty, or failed scans disable capture; unlisted runtime pairs are rejected.
-   * Defaults to true. Set false to opt out. Does not depend on verbose logging.
-   */
-  strictCatalog?: boolean;
-  /**
-   * Directory scanned when `verbose` or `strictCatalog` is true. Defaults to
-   * the process working directory.
-   */
-  catalogRoot?: string;
   timeoutMs?: number;
   maxRetries?: number;
   compression?: CompressionMode;

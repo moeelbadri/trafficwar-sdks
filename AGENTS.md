@@ -16,8 +16,13 @@ instrumentation. Framework integration examples live under `examples/`.
 - Keep `event` and `label` stable across requests. Use the canonical taxonomy
   and trace rules in the package README. Never put request IDs or user data
   into labels or dependency aliases.
-- Node's `verbose`/`strictCatalog`/`catalogRoot` options are not Python options.
-  No framework route discovery or standalone inventory CLI is implemented.
+- Node automatically registers exact observed event/label pairs only after
+  successful capture validation and queue acceptance. Values are never pinned
+  to a code location or rewritten. Use one long-lived client per service/key.
+  Do not create fake captures or declarations; there is no startup inventory.
+- Catalog memory is per client and not persistent. No scanning, filesystem,
+  JSON, API polling, explicit catalog, or strict/static options are supported.
+  Python does not yet register observed pairs.
 
 ## Maintaining the SDKs
 
@@ -25,12 +30,17 @@ instrumentation. Framework integration examples live under `examples/`.
   examples require Node 22.13+. Python supports 3.9+.
 - Preserve the event wire contract, synchronous Node enqueue behavior,
   immutable snapshots, queue bounds, and retry/idempotency behavior.
-- Verbose source scanning is optional diagnostics, not proof of instrumentation.
-  `strictCatalog` defaults to true: unresolved/empty/incomplete scans
-  disable capture without failing initialization; runtime pairs are allowlisted.
-  Keep application source available and configure `catalogRoot` as needed.
-  Explicit `strictCatalog: false` opts out; verbose and debug remain off by default.
-  Do not execute scanned application code or log payloads or credentials.
+- Keep one in-memory sent/pending pair list per client. Coalesce discoveries
+  for a fixed 1-second window, serialize uploads, send unsent deltas only, and
+  mark sent only on success. POST event,label,station_known:false only to the
+  additive backend; actual events supply station metadata. Catalog failures
+  use onError safely, retain pending identities and retry on bounded cooldowns,
+  not per capture. flush/close await work without failing event delivery.
+- Never rewrite event/label values, restore scanning/persistence, log payloads
+  or credentials, or make catalog-valid labels a requirement for valid events.
+  Keep debug diagnostics; verbose logs successful new registrations only.
+- Server deletion does not clear a running client's sent memory; restart and
+  observe the pair again to register it anew. Keep labels low-cardinality.
 - Update the package README, agent guide, tests, and `CHANGELOG.md` when a
   public contract changes. Keep agent guidance included in npm packaging.
 - Verify Node changes with `npm run check`, `npm test`, `npm run build`, and
