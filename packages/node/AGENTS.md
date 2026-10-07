@@ -25,7 +25,7 @@ application. Installing the package alone does not capture requests.
   to preload them. Unresolved metadata registers the pair with
   `station_known: false` and waits for live traffic to identify its station.
   No source paths, payloads, latency, clients, or lanes are registered. Catalog
-  writes merge idempotently; removed declarations are not automatically deleted.
+  writes replace that service's stored list; pairs missing from the upload are deleted.
   Registration failures use `onError` without blocking event capture. Both
   `strictCatalog: false` and `verbose: false` disable scanning/registration.
 - The scan includes all recognized TrafficWar calls under `catalogRoot`, not

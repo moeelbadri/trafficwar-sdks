@@ -4,6 +4,11 @@ All notable changes to the TrafficWar server SDKs are documented here.
 
 ## Unreleased
 
+## 3.0.1 (Node.js) / Unreleased (Python) - 2026-10-07
+
+- Document that catalog registration replaces the service list. The server
+  deletes stored pairs that are missing from the uploaded catalog.
+
 ## 3.0.0 (Node.js) / Unreleased (Python) - 2026-10-06
 
 - Register clean Node startup catalogs with the service-scoped catalog API
