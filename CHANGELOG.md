@@ -4,24 +4,20 @@ All notable changes to the TrafficWar server SDKs are documented here.
 
 ## Unreleased
 
-- Replace all Node catalog systems with automatic observed event/label pair
-  registration after capture validation and queue acceptance. Never rewrite
-  captured values, including dynamic values at the same wrapper site.
-- Remove AST scanning, explicit catalogs, strict/static switches, captureEnabled,
-  capture-location pinning, JSON persistence, scanner dependencies and bundled
-  parser notices. Remove catalog, catalogRoot, catalogFile and
-  TrafficWarCatalogEntry from the public API. No registration before traffic.
-- Keep one sent/pending list per long-lived client, deduplicate exact pairs,
-  coalesce a fixed 1-second window, serialize uploads and POST unsent deltas
-  containing only event,label,station_known:false to the additive backend.
-  Mark sent only after success. Safely report failures via onError, retain
-  pending pairs and retry on cooldowns capped at 30 seconds rather than per capture.
-- flush/close await catalog work without catalog failures failing event delivery.
-  Keep event validation, snapshots, batching, queue bounds and idempotency.
-  Missing/catalog-invalid labels do not block otherwise valid captures.
-- Memory resets with the SDK client; server deletion does not clear a running
-  client's sent set. verbose now logs successful new registrations only.
-  Update both agent guides, READMEs, integration fixtures and packed ESM/CJS tests.
+## 4.0.0 (Node.js) / Unreleased (Python) - 2026-10-07
+
+- **Breaking:** register observed event/label pairs after capture, instead of
+  scanning source at startup. Dynamic values are sent as captured and are not
+  rewritten.
+- **Breaking:** remove AST scanning, `strictCatalog`, `captureEnabled`,
+  `catalog`, `catalogRoot`, `catalogFile`, and `TrafficWarCatalogEntry`.
+  Nothing is registered before traffic.
+- Keep one sent/pending list per client, deduplicate exact pairs, and POST
+  unsent `{event, label, station_known:false}` deltas after a one-second
+  window. Failures stay pending, are reported through `onError`, and retry
+  with backoff capped at 30 seconds.
+- `flush` and `close` wait for catalog uploads. A catalog failure does not
+  fail event delivery. `verbose` logs each pair only after the server accepts it.
 
 ## 3.0.1 (Node.js) / Unreleased (Python) - 2026-10-07
 
