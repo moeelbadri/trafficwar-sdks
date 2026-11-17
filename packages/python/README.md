@@ -3,9 +3,9 @@
 Official, typed Python server SDK for durable event ingestion into
 [TrafficWar](https://trafficwar.tech).
 
-> **Unreleased breaking change:** this README describes the automatic batching
-> API planned after 1.0.0. No package version containing this change has been
-> published yet.
+> **Breaking changes in 2.0.0:** capture uses automatic batching and requires
+> complete event inputs. See [Event fields](#event-fields) and the lifecycle
+> examples below before upgrading.
 
 ## Install
 
@@ -17,13 +17,21 @@ Python 3.9 or newer and HTTPX `>=0.28.1,<1` are supported.
 
 ## Synchronous client
 
+The fixed durations and timestamp offsets in the examples below are illustrative.
+In an integration, record each operation's actual start timestamp and measure its
+elapsed duration with a monotonic clock; do not use capture time as the start of
+an operation that has already finished or copy the sample durations.
+
 ```python
+from datetime import datetime, timezone
+
 from trafficwar import Event, TrafficWar
 
 trafficwar = TrafficWar("tw_live_...")
 try:
     event: Event = {
         "event": "http",
+        "timestamp": datetime.now(timezone.utc),
         "http_method": "POST",
         "label": "Checkout",
         "path": "/v1/checkout",
@@ -51,8 +59,8 @@ a context manager; leaving the context calls `close()`.
 
 ## Asynchronous client
 
-The array form sends one complete trace. Emit dependency spans first and the
-edge span last, and set `timestamp` on every span; see
+The array form may send related spans or independent events. For a trace, emit
+dependency spans first and the edge span last, and set `timestamp` on every span; see
 [Traces and tiers](#traces-and-tiers).
 
 ```python
@@ -178,23 +186,34 @@ consumed so callers can safely reuse or mutate their original objects after
 
 ## Event fields
 
-`event` is the only required field. `Event` is a `TypedDict` with these
-optional fields:
+`Event` is a `TypedDict` requiring all seven fields: `event`, `label`,
+`source`, `operation_type`, `span_kind`, `timestamp`, and `latency_ms`.
+The four identity strings must be nonblank. `span_kind` must be `server`,
+`client`, `producer`, `consumer`, or `internal`. `latency_ms` must be finite
+and non-negative (zero is valid). `timestamp` must be an explicit RFC3339
+string, epoch milliseconds, or timezone-aware `datetime`; datetimes normalize
+to UTC RFC3339. The SDK never supplies capture time for a missing timestamp.
+
+Additional optional fields:
 
 - `event_id`
-- `timestamp` (RFC3339 string, epoch milliseconds, or timezone-aware
-  `datetime`; datetimes are normalized to UTC RFC3339; defaults to capture time
-  when omitted)
-- `latency_ms`
 - `properties` (JSON)
-- `user_agent`, `label`, `ip`, `source`, `country`, `city`
+- `user_agent`, `ip`, `country`, `city`
 - `trace_id`, `distinct_id`, `path`
 - `http_method` (trimmed and normalized to uppercase; must be a
   1–64-character RFC HTTP token)
 - `error`, `exception`, `error_code`
-- `span_kind` (`server`, `client`, `producer`, `consumer`, or `internal`)
-- `operation_type`
 - `status_code` (0–65535)
+
+`event="http"` requires `http_method`. HTTP events and `external` events
+with `http_method` require either a valid `status_code` or a nonblank `error`
+or `error_code` for a network failure with no response. `exception` alone is
+not an outcome. Category checks ignore case and surrounding whitespace but
+do not rewrite `event`. Supplied status codes retain the 0–65535 range.
+
+`trace_id` is optional at runtime: a batch alone does not imply a trace.
+Related spans must share a nonblank real trace ID. Independent events may
+omit it; the SDK never generates fake correlation IDs.
 
 The SDK generates a process-monotonic RFC 9562 UUIDv7 `event_id` for each event
 that omits one. A caller may override it with any valid UUID.
@@ -245,18 +264,20 @@ from `event` and `source`, so `db-replica-1`, `redis-1`, `assets.ovh-s3`, and
 Keep inclusive durations nested: the sum of the dependency spans must not
 exceed the server span, which must not exceed the client span. Set `timestamp`
 on every span of a trace. A server normally captures all of its spans after the
-request has finished, and the default capture-time timestamp would collapse
+request has finished, and using capture time for each timestamp would collapse
 them onto one instant, leaving the waterfall with no chronological axis. A
-single-span request needs none of this: one `http` span with
-`span_kind="server"` is a complete, valid event.
+single-span request needs no correlation ID or additional spans, but still
+requires all seven fields: `event`, `label`, `source`, `operation_type`,
+`span_kind`, an explicit start `timestamp`, and measured `latency_ms`. An `http`
+server span also requires `http_method` and either `status_code` or a nonblank
+`error`/`error_code` when a network failure produced no response.
 
 A server cannot measure a browser's round trip. If you emit the edge span from
 your backend, make it the widest interval you actually measured — the full
 server-side hop including routing and middleware — and let the server span
 cover only the handler. Do not invent a client round trip, and do not drop
-`latency_ms` to sidestep the problem: an absent value is stored as `0` and
-enters the latency histogram. If you have nothing wider than the handler to
-report, send the server span alone.
+`latency_ms` to sidestep the problem: missing durations are rejected. If you
+have nothing wider than the handler to report, send the server span alone.
 
 Two cautions. `source` is part of the metric aggregation grain, so when you
 derive it from `Origin` or `Referer`, match those caller-controlled values
@@ -283,13 +304,22 @@ stack trace in `properties`:
 
 ```python
 import traceback
+from datetime import datetime, timezone
+from time import perf_counter
 
+started_at = datetime.now(timezone.utc)
+started = perf_counter()
 try:
     submit_order()
 except Exception as exc:
     client.capture(
         {
             "event": "http",
+            "source": "backend-a",
+            "operation_type": "route.handler",
+            "span_kind": "server",
+            "timestamp": started_at,
+            "latency_ms": (perf_counter() - started) * 1000,
             "label": "/checkout",
             "http_method": "POST",
             "status_code": 500,
@@ -389,9 +419,22 @@ also exposes `period`, `used`, `limit`, `remaining_events`, `batch_events`, and
 `retry_after_secs`.
 
 ```python
+from datetime import datetime, timezone
+
 from trafficwar import RateLimitError
 
-client.capture({"event": "job.failed", "status_code": 500})
+client.capture(
+    {
+        "event": "job.failed",
+        "label": "Nightly job",
+        "source": "worker-a",
+        "operation_type": "job.run",
+        "span_kind": "internal",
+        "timestamp": datetime.now(timezone.utc),
+        "latency_ms": 12.5,
+        "status_code": 500,
+    }
+)
 
 try:
     client.close()
@@ -406,12 +449,23 @@ or instrumentation. TrafficWar does not close caller-owned clients.
 
 ```python
 import httpx
+from datetime import datetime, timezone
 from trafficwar import TrafficWar
 
 http = httpx.Client(http2=True)
 trafficwar = TrafficWar("tw_live_...", http_client=http)
 try:
-    trafficwar.capture({"event": "job_finished"})
+    trafficwar.capture(
+        {
+            "event": "job_finished",
+            "label": "Nightly job",
+            "source": "worker-a",
+            "operation_type": "job.run",
+            "span_kind": "internal",
+            "timestamp": datetime.now(timezone.utc),
+            "latency_ms": 12.5,
+        }
+    )
 finally:
     trafficwar.close()  # flushes the event and leaves `http` open
     http.close()

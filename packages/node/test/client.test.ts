@@ -21,6 +21,7 @@ import {
   TRAFFICWAR_MAX_DECODED_BODY_BYTES,
 } from "../src";
 import type { TrafficWarFetch, TrafficWarOptions } from "../src";
+import { validEvent } from "./fixtures";
 
 // These transport tests assert event batching only. Catalog HTTP behavior is
 // exercised independently by observedCatalog.test.ts with the real client.
@@ -138,6 +139,7 @@ describe("TrafficWar queued capture", () => {
     });
 
     const result = client.capture({
+      ...validEvent,
       event: "pageview",
       latency_ms: 12.5,
       properties: { path: "/pricing" },
@@ -199,13 +201,13 @@ describe("TrafficWar queued capture", () => {
       },
     });
     const events = Object.freeze([
-      Object.freeze({ event: "started" }),
-      Object.freeze({ event: "failed", status_code: 500 }),
+      Object.freeze({ ...validEvent, event: "started" }),
+      Object.freeze({ ...validEvent, event: "failed", status_code: 500 }),
     ]);
 
     expect(client.capture(events)).toBeUndefined();
     expect(
-      client.captureBatch(Object.freeze([{ event: "legacy" }])),
+      client.captureBatch(Object.freeze([{ ...validEvent, event: "legacy" }])),
     ).toBeUndefined();
     expect(calls).toHaveLength(0);
 
@@ -232,6 +234,7 @@ describe("TrafficWar queued capture", () => {
     const date = new Date("2026-08-21T12:34:56.789Z");
     const nested = { original: true, values: [1, 2] };
     const event = {
+      ...validEvent,
       event: "clock",
       timestamp: date,
       properties: nested,
@@ -266,9 +269,10 @@ describe("TrafficWar queued capture", () => {
 
     client.capture([
       ...Array.from({ length: 128 }, (_, index) => ({
+        ...validEvent,
         event: `generated-${index}`,
       })),
-      { event: "override", event_id: override },
+      { ...validEvent, event: "override", event_id: override },
     ]);
     await client.flush();
 
@@ -294,6 +298,7 @@ describe("TrafficWar queued capture", () => {
       },
     });
     client.capture({
+      ...validEvent,
       event: "large",
       properties: { payload: "compress-me-".repeat(200) },
     });
@@ -338,6 +343,7 @@ describe("TrafficWar queued capture", () => {
       });
 
       client.capture({
+        ...validEvent,
         event: "private.event",
         properties: { token: "private-property" },
       });
@@ -380,7 +386,7 @@ describe("TrafficWar queued capture", () => {
         fetch: async (_url, init) => successResponse(init, "quiet"),
       });
 
-      client.capture({ event: "quiet" });
+      client.capture({ ...validEvent, event: "quiet" });
       await client.close();
 
       expect(debug).not.toHaveBeenCalled();
@@ -402,7 +408,12 @@ describe("TrafficWar queued capture", () => {
       fetch: async (_url, init) => successResponse(init, "unref"),
     });
 
-    client.capture({ event: "unref" });
+    // Discover and send the pair first, so the second capture schedules only
+    // the queue timer rather than also the independent catalog timer.
+    client.capture({ ...validEvent, event: "unref" });
+    await client.flush();
+    unref.mockClear();
+    client.capture({ ...validEvent, event: "unref" });
     expect(unref).toHaveBeenCalledTimes(1);
     await client.flush();
   });
@@ -421,9 +432,9 @@ describe("TrafficWar automatic batching", () => {
       },
     });
 
-    client.capture({ event: "first" });
+    client.capture({ ...validEvent, event: "first" });
     await vi.advanceTimersByTimeAsync(500);
-    client.capture({ event: "second" });
+    client.capture({ ...validEvent, event: "second" });
     await vi.advanceTimersByTimeAsync(499);
     expect(calls).toHaveLength(0);
 
@@ -447,6 +458,7 @@ describe("TrafficWar automatic batching", () => {
 
     client.capture(
       Array.from({ length: TRAFFICWAR_MAX_BATCH_SIZE }, (_, index) => ({
+        ...validEvent,
         event: `threshold-${index}`,
       })),
     );
@@ -476,6 +488,7 @@ describe("TrafficWar automatic batching", () => {
 
     client.capture(
       Array.from({ length: 25_001 }, (_, index) => ({
+        ...validEvent,
         event: `chunk-${index}`,
       })),
     );
@@ -504,7 +517,7 @@ describe("TrafficWar automatic batching", () => {
         return successResponse(init, String(accepted));
       },
     });
-    const event = Object.freeze({ event: "large-queue" });
+    const event = Object.freeze({ ...validEvent, event: "large-queue" });
     const events = Array.from({ length: eventCount }, () => event);
 
     expect(() => client.capture(events)).not.toThrow();
@@ -530,6 +543,7 @@ describe("TrafficWar automatic batching", () => {
 
     client.capture(
       Array.from({ length: 10 }, (_, index) => ({
+        ...validEvent,
         event: `wire-${index}`,
         properties: { payload: "x".repeat(300_000) },
       })),
@@ -558,6 +572,7 @@ describe("TrafficWar automatic batching", () => {
 
     client.capture(
       Array.from({ length: 20 }, (_, index) => ({
+        ...validEvent,
         event: `decoded-${index}`,
         properties: { payload: "compressible".repeat(40_000) },
       })),
@@ -586,7 +601,7 @@ describe("TrafficWar automatic batching", () => {
           : successResponse(init, "second");
       },
     });
-    client.capture({ event: "first" });
+    client.capture({ ...validEvent, event: "first" });
 
     const flushA = client.flush();
     const flushB = client.flush();
@@ -594,7 +609,7 @@ describe("TrafficWar automatic batching", () => {
     await settleBackground();
     expect(calls).toHaveLength(1);
 
-    client.capture({ event: "during-flight" });
+    client.capture({ ...validEvent, event: "during-flight" });
     first.resolve(successResponse(calls[0]!, "first"));
 
     const [resultA, resultB] = await Promise.all([flushA, flushB]);
@@ -617,14 +632,14 @@ describe("TrafficWar automatic batching", () => {
         return gate.promise;
       },
     });
-    client.capture([{ event: "one" }, { event: "two" }]);
+    client.capture([{ ...validEvent, event: "one" }, { ...validEvent, event: "two" }]);
     const flushing = client.flush();
     await settleBackground();
 
-    expect(() => client.capture({ event: "overflow" })).toThrow(
+    expect(() => client.capture({ ...validEvent, event: "overflow" })).toThrow(
       TrafficWarValidationError,
     );
-    expect(() => client.capture({ event: "overflow" })).toThrow(
+    expect(() => client.capture({ ...validEvent, event: "overflow" })).toThrow(
       /queue cannot exceed 2 events/,
     );
 
@@ -648,12 +663,12 @@ describe("TrafficWar automatic batching", () => {
           : successResponse(init, "reuse-id");
       },
     });
-    client.capture({ event: "in-flight", event_id: eventId });
+    client.capture({ ...validEvent, event: "in-flight", event_id: eventId });
     const flushing = client.flush();
     await settleBackground();
 
     expect(() =>
-      client.capture({ event: "duplicate", event_id: eventId }),
+      client.capture({ ...validEvent, event: "duplicate", event_id: eventId }),
     ).toThrow(
       expect.objectContaining({ path: "event.event_id" }),
     );
@@ -661,7 +676,7 @@ describe("TrafficWar automatic batching", () => {
     gate.resolve(successResponse(call!, "inflight-id"));
     await flushing;
     expect(() =>
-      client.capture({ event: "reuse", event_id: eventId }),
+      client.capture({ ...validEvent, event: "reuse", event_id: eventId }),
     ).not.toThrow();
     await client.flush();
   });
@@ -687,6 +702,7 @@ describe("TrafficWar failures and idempotency", () => {
       },
     });
     client.capture({
+      ...validEvent,
       event: "retry",
       properties: { payload: "same-body".repeat(200) },
     });
@@ -727,7 +743,7 @@ describe("TrafficWar failures and idempotency", () => {
         return successResponse(init, "recovered");
       },
     });
-    client.capture({ event: "retained", properties: { n: 1 } });
+    client.capture({ ...validEvent, event: "retained", properties: { n: 1 } });
 
     await vi.advanceTimersByTimeAsync(1_000);
     expect(calls).toHaveLength(1);
@@ -771,7 +787,7 @@ describe("TrafficWar failures and idempotency", () => {
     });
 
     try {
-      client.capture({ event: "async-on-error" });
+      client.capture({ ...validEvent, event: "async-on-error" });
       await vi.advanceTimersByTimeAsync(1_000);
       await settleBackground();
 
@@ -806,7 +822,7 @@ describe("TrafficWar failures and idempotency", () => {
             )
           : successResponse(init, "sync-on-error-retry"),
     });
-    client.capture({ event: "sync-on-error" });
+    client.capture({ ...validEvent, event: "sync-on-error" });
 
     await vi.advanceTimersByTimeAsync(1_000);
     expect(onError).toHaveBeenCalledTimes(1);
@@ -832,7 +848,7 @@ describe("TrafficWar failures and idempotency", () => {
           : successResponse(init, "background-retry");
       },
     });
-    client.capture({ event: "automatic-retry" });
+    client.capture({ ...validEvent, event: "automatic-retry" });
 
     await vi.advanceTimersByTimeAsync(1_000);
     expect(calls).toHaveLength(1);
@@ -867,7 +883,7 @@ describe("TrafficWar failures and idempotency", () => {
         return successResponse(init, "recovered");
       },
     });
-    client.capture({ event: "offline" });
+    client.capture({ ...validEvent, event: "offline" });
 
     await expect(client.flush()).rejects.toMatchObject({
       name: "TrafficWarConnectionError",
@@ -899,13 +915,13 @@ describe("TrafficWar failures and idempotency", () => {
             )
           : successResponse(init, "failed-id-retry"),
     });
-    client.capture({ event: "retained-id", event_id: eventId });
+    client.capture({ ...validEvent, event: "retained-id", event_id: eventId });
 
     await expect(client.flush()).rejects.toBeInstanceOf(
       TrafficWarApiError,
     );
     expect(() =>
-      client.capture({ event: "duplicate", event_id: eventId }),
+      client.capture({ ...validEvent, event: "duplicate", event_id: eventId }),
     ).toThrow(
       expect.objectContaining({ path: "event.event_id" }),
     );
@@ -913,7 +929,7 @@ describe("TrafficWar failures and idempotency", () => {
     fail = false;
     await client.flush();
     expect(() =>
-      client.capture({ event: "reuse", event_id: eventId }),
+      client.capture({ ...validEvent, event: "reuse", event_id: eventId }),
     ).not.toThrow();
     await client.flush();
   });
@@ -937,7 +953,7 @@ describe("TrafficWar failures and idempotency", () => {
             : successResponse(init, String(status));
         },
       });
-      client.capture({ event: "retryable" });
+      client.capture({ ...validEvent, event: "retryable" });
 
       const result = await client.flush();
       expect(calls).toBe(2);
@@ -963,7 +979,7 @@ describe("TrafficWar failures and idempotency", () => {
           : successResponse(init, "after");
       },
     });
-    client.capture({ event: "wait" });
+    client.capture({ ...validEvent, event: "wait" });
     const pending = client.flush();
 
     await vi.advanceTimersByTimeAsync(0);
@@ -1002,7 +1018,7 @@ describe("TrafficWar failures and idempotency", () => {
           : successResponse(init, "quota-retry");
       },
     });
-    client.capture([{ event: "one" }, { event: "two" }]);
+    client.capture([{ ...validEvent, event: "one" }, { ...validEvent, event: "two" }]);
 
     let thrown: unknown;
     try {
@@ -1040,7 +1056,7 @@ describe("TrafficWar failures and idempotency", () => {
           ? makeResponse("<html>oops</html>", { raw: true })
           : successResponse(init, "protocol-retry"),
     });
-    client.capture({ event: "protocol" });
+    client.capture({ ...validEvent, event: "protocol" });
 
     await expect(client.flush()).rejects.toMatchObject({
       name: "TrafficWarProtocolError",
@@ -1067,7 +1083,7 @@ describe("TrafficWar failures and idempotency", () => {
           : successResponse(init, "bound-retry");
       },
     });
-    client.capture({ event: "bounded" });
+    client.capture({ ...validEvent, event: "bounded" });
 
     await expect(client.flush()).rejects.toMatchObject({
       name: "TrafficWarApiError",
@@ -1103,13 +1119,13 @@ describe("TrafficWar lifecycle", () => {
         return successResponse(init, "close");
       },
     });
-    client.capture({ event: "close" });
+    client.capture({ ...validEvent, event: "close" });
 
     await expect(client.close()).resolves.toMatchObject({
       accepted: 1,
     });
     expect(calls).toBe(1);
-    expect(() => client.capture({ event: "late" })).toThrow(/closed/);
+    expect(() => client.capture({ ...validEvent, event: "late" })).toThrow(/closed/);
     await expect(client.close()).resolves.toEqual({
       accepted: 0,
       batches: [],
@@ -1127,10 +1143,10 @@ describe("TrafficWar lifecycle", () => {
         return gate.promise;
       },
     });
-    client.capture([{ event: "one" }, { event: "two" }]);
+    client.capture([{ ...validEvent, event: "one" }, { ...validEvent, event: "two" }]);
 
     const closing = client.close();
-    expect(() => client.capture({ event: "too-late" })).toThrow(
+    expect(() => client.capture({ ...validEvent, event: "too-late" })).toThrow(
       expect.objectContaining({
         name: "TrafficWarValidationError",
         path: "client",
@@ -1161,7 +1177,7 @@ describe("TrafficWar lifecycle", () => {
         return gate.promise;
       },
     });
-    client.capture({ event: "singleflight-close" });
+    client.capture({ ...validEvent, event: "singleflight-close" });
 
     const flushing = client.flush();
     const closing = client.close();
@@ -1172,7 +1188,7 @@ describe("TrafficWar lifecycle", () => {
     await expect(flushing).resolves.toMatchObject({ accepted: 1 });
     await expect(closing).resolves.toMatchObject({ accepted: 1 });
     expect(calls).toHaveLength(1);
-    expect(() => client.capture({ event: "late" })).toThrow(/closed/);
+    expect(() => client.capture({ ...validEvent, event: "late" })).toThrow(/closed/);
   });
 
   it("a failed close retains work and leaves the client retryable", async () => {
@@ -1192,15 +1208,15 @@ describe("TrafficWar lifecycle", () => {
           : successResponse(init, String(calls.length));
       },
     });
-    client.capture({ event: "before-failed-close" });
+    client.capture({ ...validEvent, event: "before-failed-close" });
 
     const failedClose = client.close();
     expect(() =>
-      client.capture({ event: "during-failed-close" }),
+      client.capture({ ...validEvent, event: "during-failed-close" }),
     ).toThrow(/closing/);
     expect(client.flush()).toBe(failedClose);
     await expect(failedClose).rejects.toBeInstanceOf(TrafficWarApiError);
-    expect(() => client.capture({ event: "after-failed-close" })).not.toThrow();
+    expect(() => client.capture({ ...validEvent, event: "after-failed-close" })).not.toThrow();
 
     fail = false;
     const result = await client.close();

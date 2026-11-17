@@ -13,6 +13,12 @@ SpanKind = Literal["server", "client", "producer", "consumer", "internal"]
 
 class _RequiredEvent(TypedDict):
     event: str
+    label: str
+    source: str
+    operation_type: str
+    span_kind: SpanKind
+    timestamp: Timestamp
+    latency_ms: float
 
 
 class Event(_RequiredEvent, total=False):
@@ -25,13 +31,9 @@ class Event(_RequiredEvent, total=False):
     """
 
     event_id: str
-    timestamp: Timestamp
-    latency_ms: float
     properties: JSONValue
     user_agent: str
-    label: str
     ip: str
-    source: str
     country: str
     city: str
     trace_id: str
@@ -41,8 +43,6 @@ class Event(_RequiredEvent, total=False):
     error: str
     exception: str
     error_code: str
-    span_kind: SpanKind
-    operation_type: str
     status_code: int
 
 

@@ -31,6 +31,11 @@ import { createRequire } from "node:module";
 import { join } from "node:path";
 const esm = await import("@trafficwar/node");
 const cjs = createRequire(import.meta.url)("@trafficwar/node");
+const validEvent = {
+  event: "database", label: "Checkout", source: "backend-a",
+  operation_type: "route.handler", span_kind: "server",
+  timestamp: "2026-08-21T12:30:00Z", latency_ms: 1,
+};
 for (const sdk of [esm, cjs]) {
   const sent = [], posts = [], logs = [];
   const client = new sdk.TrafficWar({
@@ -54,13 +59,13 @@ for (const sdk of [esm, cjs]) {
   console.info = message => logs.push(message);
   try {
     function work(input) { client.capture(input); }
-    const first = { event: "database", label: "First", latency_ms: 3 };
+    const first = { ...validEvent, event: "database", label: "First", latency_ms: 3 };
     work(first);
     first.label = "Caller mutation";
-    work({ event: "redis", label: "Changed", latency_ms: 19 });
+    work({ ...validEvent, event: "redis", label: "Changed", latency_ms: 19 });
     assert.equal((await client.flush()).accepted, 2);
-    work({ event: "database", label: "First" });
-    work({ event: "http", label: "Delta" });
+    work({ ...validEvent, event: "database", label: "First" });
+    work({ ...validEvent, event: "http", label: "Delta", http_method: "GET", status_code: 200 });
     assert.equal((await client.close()).accepted, 2);
     assert.deepEqual(posts, [
       { captures: [{ event: "database", label: "First", station_known: false }, { event: "redis", label: "Changed", station_known: false }] },
@@ -82,12 +87,24 @@ assert.ok(!readdirSync(join(process.cwd(), "node_modules", "@trafficwar", "node"
   for (const filename of ["esm.mts", "cjs.cts"]) {
     writeFileSync(join(consumerRoot, filename), `
 import { TrafficWar, type FlushResult, type S3Source, type TrafficWarEvent } from "@trafficwar/node";
-const event: TrafficWarEvent = { event: "http", http_method: "GET" };
+const validEvent = {
+  event: "database", label: "Checkout", source: "backend-a",
+  operation_type: "route.handler", span_kind: "server" as const,
+  timestamp: "2026-08-21T12:30:00Z", latency_ms: 1,
+};
+const event: TrafficWarEvent = { ...validEvent, event: "http", http_method: "GET", status_code: 200 };
 const source: S3Source = "assets.ovh-s3";
 const client = new TrafficWar({ apiKey: "test-key" });
-client.capture([event, { event: "s3", source, operation_type: "s3.get_object" }]);
+client.capture([event, { ...validEvent, event: "s3", source, operation_type: "s3.get_object" }]);
 const pending: Promise<FlushResult> = client.flush();
 void pending;
+// @ts-expect-error A category alone is no longer a complete explicit span.
+client.capture({ event: "database" });
+const { timestamp, ...withoutTimestamp } = validEvent;
+// @ts-expect-error The measured start timestamp is required.
+client.capture(withoutTimestamp);
+// @ts-expect-error Span kinds are a closed enum.
+client.capture({ ...validEvent, span_kind: "database" });
 // @ts-expect-error Removed catalog switches must not be part of the API.
 new TrafficWar({ apiKey: "test-key", strictCatalog: false });
 // @ts-expect-error Removed explicit catalog type must not be exported.

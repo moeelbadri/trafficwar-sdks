@@ -4,6 +4,22 @@ All notable changes to the TrafficWar server SDKs are documented here.
 
 ## Unreleased
 
+## 5.0.0 (Node.js) / 2.0.0 (Python) - 2026-11-17
+
+- **Breaking (Node.js and Python):** require `event`, `label`, `source`,
+  `operation_type`, `span_kind`, `timestamp`, and `latency_ms` on every event.
+  Identity strings must be non-blank; latency must be finite and nonnegative.
+  Remove the capture-time timestamp default; callers supply actual span starts.
+- Require `http_method` for HTTP events and a `status_code` or non-blank
+  `error`/`error_code` for HTTP events and external events carrying a method.
+  Preserve network failures without inventing response statuses. Update AI
+  integration guidance, examples, and regression tests for the stricter contract.
+- Python 2.0.0 also includes the automatic batching API previously documented
+  as unreleased: synchronous and asynchronous capture enqueue immutable events,
+  with bounded queues, background delivery, retries, and explicit flush/close.
+- Update Node framework-example dependencies to clear the production dependency
+  audit required by the publish workflow; the Node SDK remains dependency-free.
+
 ## 4.0.0 (Node.js) / Unreleased (Python) - 2026-10-07
 
 - **Breaking:** register observed event/label pairs after capture, instead of

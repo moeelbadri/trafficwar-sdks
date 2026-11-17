@@ -49,6 +49,7 @@ export class GreetingService implements OnModuleDestroy {
   }
 
   findGreeting(name: string, httpMethod: string): Greeting | undefined {
+    const timestamp = new Date();
     const requestStartedAt = performance.now();
     const queryStartedAt = performance.now();
     const row = this.#findByName(name);
@@ -66,6 +67,7 @@ export class GreetingService implements OnModuleDestroy {
       span_kind: "server",
       operation_type: "route.handler",
       status_code: statusCode,
+      timestamp,
       latency_ms: performance.now() - requestStartedAt,
       properties: {
         row_id: row?.id ?? null,

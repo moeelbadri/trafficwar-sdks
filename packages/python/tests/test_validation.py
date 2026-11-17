@@ -8,6 +8,7 @@ from typing import Any
 import httpx
 import pytest
 
+from event_fixture import VALID_EVENT
 from trafficwar import (
     DEFAULT_FLUSH_INTERVAL,
     DEFAULT_MAX_QUEUE_SIZE,
@@ -113,15 +114,15 @@ async def test_injected_async_client_must_be_open() -> None:
     [
         {},
         {"label": "missing event"},
-        {"event": ""},
-        {"event": "   "},
-        {"event": 123},
-        {"event": "x", "unknown": True},
-        {"event": "x", "user_id": "forbidden"},
-        {"event": "x", "service": "forbidden"},
-        {"event": "x", "event_id": None},
-        {"event": "x", "span_kind": "database"},
-        {"event": "x", "span_kind": []},
+        {**VALID_EVENT, "event": ""},
+        {**VALID_EVENT, "event": "   "},
+        {**VALID_EVENT, "event": 123},
+        {**VALID_EVENT, "event": "x", "unknown": True},
+        {**VALID_EVENT, "event": "x", "user_id": "forbidden"},
+        {**VALID_EVENT, "event": "x", "service": "forbidden"},
+        {**VALID_EVENT, "event": "x", "event_id": None},
+        {**VALID_EVENT, "event": "x", "span_kind": "database"},
+        {**VALID_EVENT, "event": "x", "span_kind": []},
     ],
 )
 def test_event_shape_validation_happens_at_enqueue(event: dict[str, Any]) -> None:
@@ -153,7 +154,7 @@ def test_capture_batch_requires_an_iterable_even_when_mapping_is_valid_event() -
     client, http = sync_client()
 
     with pytest.deprecated_call(), pytest.raises(ValidationError, match="iterable"):
-        client.capture_batch({"event": "not-a-batch"})
+        client.capture_batch({**VALID_EVENT, "event": "not-a-batch"})
 
     client.close()
     http.close()
@@ -163,7 +164,7 @@ def test_capture_batch_requires_an_iterable_even_when_mapping_is_valid_event() -
 def test_latency_must_be_finite_number(latency: Any) -> None:
     client, http = sync_client()
     with pytest.raises(ValidationError, match="latency_ms"):
-        client.capture({"event": "x", "latency_ms": latency})  # type: ignore[typeddict-item]
+        client.capture({**VALID_EVENT, "event": "x", "latency_ms": latency})
     client.close()
     http.close()
 
@@ -172,7 +173,7 @@ def test_latency_must_be_finite_number(latency: Any) -> None:
 def test_status_code_must_be_uint16(status_code: Any) -> None:
     client, http = sync_client()
     with pytest.raises(ValidationError, match="status_code"):
-        client.capture({"event": "x", "status_code": status_code})  # type: ignore[typeddict-item]
+        client.capture({**VALID_EVENT, "event": "x", "status_code": status_code})
     client.close()
     http.close()
 
@@ -200,7 +201,7 @@ def test_http_method_is_normalized(http_method: str, expected: str) -> None:
         flush_interval=60,
         http_client=http,
     )
-    event = {"event": "http", "http_method": http_method}
+    event = {**VALID_EVENT, "event": "http", "http_method": http_method, "status_code": 200}
 
     client.capture(event)
     client.flush()
@@ -228,7 +229,7 @@ def test_invalid_explicit_http_method_is_rejected(http_method: Any) -> None:
     client, http = sync_client()
 
     with pytest.raises(ValidationError, match=r"event\.http_method"):
-        client.capture({"event": "http", "http_method": http_method})
+        client.capture({**VALID_EVENT, "event": "http", "http_method": http_method})
 
     client.close()
     http.close()
@@ -248,39 +249,17 @@ def test_invalid_explicit_http_method_is_rejected(http_method: Any) -> None:
 def test_timestamp_validation(timestamp: Any) -> None:
     client, http = sync_client()
     with pytest.raises(ValidationError, match="timestamp"):
-        client.capture({"event": "x", "timestamp": timestamp})  # type: ignore[typeddict-item]
+        client.capture({**VALID_EVENT, "event": "x", "timestamp": timestamp})
     client.close()
     http.close()
 
 
-def test_missing_timestamp_defaults_to_capture_time() -> None:
-    requests: list[httpx.Request] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        requests.append(request)
-        return success(request)
-
-    http = httpx.Client(transport=httpx.MockTransport(handler))
-    client = TrafficWar(
-        "key",
-        compression="none",
-        flush_interval=60,
-        http_client=http,
-    )
-    event = {"event": "x"}
-    before = datetime.now(timezone.utc)
-
-    client.capture(event)  # type: ignore[arg-type]
-    client.flush()
-    after = datetime.now(timezone.utc)
-
-    payload = json.loads(requests[0].content)
-    assert "timestamp" not in event
-    timestamp = payload[0]["timestamp"]
-    assert isinstance(timestamp, str)
-    parsed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
-    assert before <= parsed <= after
-
+def test_missing_timestamp_is_rejected() -> None:
+    client, http = sync_client()
+    event = {key: value for key, value in VALID_EVENT.items() if key != "timestamp"}
+    with pytest.raises(ValidationError, match="timestamp"):
+        client.capture(event)
+    assert client.flush().accepted == 0
     client.close()
     http.close()
 
@@ -309,7 +288,7 @@ def test_datetime_is_normalized_and_deeply_snapshotted() -> None:
         123456,
         tzinfo=timezone(timedelta(hours=2)),
     )
-    event = {"event": "x", "timestamp": timestamp}
+    event = {**VALID_EVENT, "event": "x", "timestamp": timestamp}
 
     client.capture(event)  # type: ignore[arg-type]
     client.flush()
@@ -345,7 +324,7 @@ def test_any_canonical_uuid_override_is_preserved(event_id: str) -> None:
         flush_interval=60,
         http_client=http,
     )
-    client.capture({"event": "override", "event_id": event_id})
+    client.capture({**VALID_EVENT, "event": "override", "event_id": event_id})
     client.flush()
 
     assert json.loads(requests[0].content)[0]["event_id"] == event_id
@@ -365,7 +344,7 @@ def test_any_canonical_uuid_override_is_preserved(event_id: str) -> None:
 def test_invalid_uuid_override_is_rejected(event_id: str) -> None:
     client, http = sync_client()
     with pytest.raises(ValidationError, match="UUID"):
-        client.capture({"event": "bad-id", "event_id": event_id})
+        client.capture({**VALID_EVENT, "event": "bad-id", "event_id": event_id})
     client.close()
     http.close()
 
@@ -377,8 +356,8 @@ def test_duplicate_event_ids_in_one_enqueue_are_rejected_atomically() -> None:
     with pytest.raises(ValidationError, match=r"events\[1\]\.event_id duplicates"):
         client.capture(
             [
-                {"event": "one", "event_id": event_id},
-                {"event": "two", "event_id": event_id},
+                {**VALID_EVENT, "event": "one", "event_id": event_id},
+                {**VALID_EVENT, "event": "two", "event_id": event_id},
             ]
         )
 
@@ -391,7 +370,7 @@ def test_validation_failure_in_iterable_does_not_enqueue_earlier_events() -> Non
     client, http = sync_client()
 
     with pytest.raises(ValidationError, match=r"events\[1\]\.event"):
-        client.capture([{"event": "valid"}, {"event": ""}])
+        client.capture([{**VALID_EVENT, "event": "valid"}, {**VALID_EVENT, "event": ""}])
 
     assert client.flush().accepted == 0
     client.close()
@@ -411,7 +390,7 @@ def test_nested_json_is_validated_at_enqueue(properties: Any) -> None:
     client, http = sync_client()
 
     with pytest.raises(SerializationError, match="JSON serializable"):
-        client.capture({"event": "x", "properties": properties})  # type: ignore[typeddict-item]
+        client.capture({**VALID_EVENT, "event": "x", "properties": properties})
 
     client.close()
     http.close()
@@ -423,7 +402,7 @@ def test_circular_json_is_rejected_at_enqueue() -> None:
     client, http = sync_client()
 
     with pytest.raises(SerializationError, match="JSON serializable"):
-        client.capture({"event": "x", "properties": properties})  # type: ignore[typeddict-item]
+        client.capture({**VALID_EVENT, "event": "x", "properties": properties})
 
     client.close()
     http.close()
@@ -431,10 +410,10 @@ def test_circular_json_is_rejected_at_enqueue() -> None:
 
 def test_queue_overflow_rejects_whole_enqueue() -> None:
     client, http = sync_client(max_queue_size=3)
-    client.capture([{"event": "one"}, {"event": "two"}])
+    client.capture([{**VALID_EVENT, "event": "one"}, {**VALID_EVENT, "event": "two"}])
 
     with pytest.raises(ValidationError, match="queue cannot exceed 3"):
-        client.capture([{"event": "three"}, {"event": "four"}])
+        client.capture([{**VALID_EVENT, "event": "three"}, {**VALID_EVENT, "event": "four"}])
 
     assert client.flush().accepted == 2
     client.close()
@@ -458,6 +437,7 @@ def test_single_oversized_event_is_retained_and_surfaced_from_flush() -> None:
     )
     client.capture(
         {
+            **VALID_EVENT,
             "event": "too-large",
             "properties": {"payload": "x" * MAX_ENCODED_BODY_BYTES},
         }
@@ -481,7 +461,7 @@ def test_capture_has_no_per_call_idempotency_option() -> None:
 
     with pytest.raises(TypeError, match="idempotency_key"):
         client.capture(  # type: ignore[call-arg]
-            {"event": "x"},
+            {**VALID_EVENT, "event": "x"},
             idempotency_key="caller-key",
         )
 
@@ -495,7 +475,7 @@ async def test_async_capture_has_no_per_call_idempotency_option() -> None:
 
     with pytest.raises(TypeError, match="idempotency_key"):
         await client.capture(  # type: ignore[call-arg]
-            {"event": "x"},
+            {**VALID_EVENT, "event": "x"},
             idempotency_key="caller-key",
         )
 

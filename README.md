@@ -26,6 +26,7 @@ const trafficwar = new TrafficWar({
   apiKey: process.env.TRAFFICWAR_API_KEY!,
 });
 
+// Illustrative timing; use the actual start and measured duration in your handler.
 trafficwar.capture({
   event: "http",
   http_method: "POST",
@@ -35,6 +36,7 @@ trafficwar.capture({
   span_kind: "server",
   operation_type: "route.handler",
   status_code: 200,
+  timestamp: new Date(Date.now() - 184),
   latency_ms: 184.2,
   distinct_id: "usr_7f3a91c2",
   properties: {
@@ -54,6 +56,8 @@ Application failures should keep their first-class outcome fields and place
 the complete stack trace in `properties`:
 
 ```ts
+const requestStartedAt = new Date();
+const started = performance.now();
 try {
   await submitOrder();
 } catch (caught) {
@@ -65,6 +69,10 @@ try {
     path: "/v1/checkout",
     source: "backend-a",
     span_kind: "server",
+    operation_type: "route.handler",
+    timestamp: requestStartedAt,
+    latency_ms: performance.now() - started,
+    http_method: "POST",
     status_code: 500,
     error: error.message,
     error_code: "CHECKOUT_FAILED",
@@ -93,7 +101,7 @@ unsent pairs as `{ event, label, station_known: false }` to the additive
 
 There is no source scanning, explicit catalog, strict/static switch, location
 pinning, filesystem access, JSON persistence, polling, or registration before
-traffic. Missing or catalog-invalid labels do not block otherwise valid events.
+traffic. Missing or blank labels fail event validation; non-blank labels outside catalog limits can still be delivered without registration.
 `flush()`/`close()` await catalog work without catalog failures breaking event
 delivery; failures report safely via `onError` and retain pending pairs for
 bounded cooldown retries, not a retry per capture. Sent memory lasts until the
@@ -115,6 +123,7 @@ python -m pip install trafficwar
 
 ```python
 import os
+from datetime import datetime, timedelta, timezone
 
 from trafficwar import TrafficWar
 
@@ -130,6 +139,7 @@ try:
             "span_kind": "server",
             "operation_type": "route.handler",
             "status_code": 200,
+            "timestamp": datetime.now(timezone.utc) - timedelta(milliseconds=184.2),
             "latency_ms": 184.2,
             "distinct_id": "usr_7f3a91c2",
             "properties": {
@@ -147,6 +157,7 @@ print(flushed.accepted, len(flushed.batches))
 
 ```python
 import os
+from datetime import datetime, timedelta, timezone
 
 from trafficwar import AsyncTrafficWar
 
@@ -164,6 +175,7 @@ async def send_events() -> None:
                 "span_kind": "server",
                 "operation_type": "route.handler",
                 "status_code": 200,
+                "timestamp": datetime.now(timezone.utc) - timedelta(milliseconds=184.2),
                 "latency_ms": 184.2,
                 "distinct_id": "usr_7f3a91c2",
                 "properties": {
@@ -183,6 +195,10 @@ async def send_events() -> None:
 iterable (Python). It validates, snapshots, and enqueues the input immediately.
 Node and synchronous Python `capture` return nothing. Async Python
 `await capture(...)` waits only for enqueueing, not for an HTTP request.
+
+Every event requires `event`, `label`, `source`, `operation_type`, `span_kind`, `timestamp`, and `latency_ms`. Identity strings must be non-blank, latency must be finite and nonnegative, and timestamps must describe actual span starts; there is no capture-time default. The fixed durations and timestamps above are illustrative—record real measurements in application code.
+
+HTTP events require `http_method`. HTTP events and `external` events with a method require `status_code`, or a non-blank `error`/`error_code` for failures without a response. Related spans must share a non-blank `trace_id`; standalone events may omit it. A batch can contain independent events, so trace correlation is an instrumentation requirement rather than inferred by the SDK.
 
 The queue starts an automatic flush one second after its first pending event,
 or immediately when it reaches TrafficWar's fixed 10,000-event request
@@ -234,9 +250,8 @@ substitute the API `Host` header.
 
 Emit dependency spans first and the edge span last, keep inclusive durations
 nested so that the dependency total does not exceed the server span and the
-server span does not exceed the client span, and set `timestamp` explicitly on
-every span of a trace — the capture-time default collapses a trace recorded
-after the request onto one instant. Full runnable trace examples are in
+server span does not exceed the client span, and set `timestamp` to the actual start of
+every span, not its capture time after completion. Full runnable trace examples are in
 [`packages/node`](packages/node) and [`packages/python`](packages/python).
 
 For S3, a provider alias such as `ovh-s3`, `aws-s3`, or `minio` creates one

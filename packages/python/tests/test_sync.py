@@ -8,6 +8,7 @@ from typing import Any, Callable
 import httpx
 import pytest
 
+from event_fixture import VALID_EVENT
 from trafficwar import (
     MAX_BATCH_EVENTS,
     MAX_DECODED_BODY_BYTES,
@@ -51,7 +52,7 @@ def make_client(
     http = httpx.Client(transport=httpx.MockTransport(handler))
     client = TrafficWar(
         "secret-key",
-        compression="none",
+        compression=kwargs.pop("compression", "none"),
         flush_interval=60,
         http_client=http,
         **kwargs,
@@ -80,7 +81,7 @@ def test_capture_queues_without_immediate_http_and_flushes_one_bare_array() -> N
     requests: list[httpx.Request] = []
     client, http = make_client(lambda request: requests.append(request) or success(request, "one"))
 
-    result = client.capture({"event": "checkout", "latency_ms": 12.5})
+    result = client.capture({**VALID_EVENT, "event": "checkout", "latency_ms": 12.5})
 
     assert result is None
     assert requests == []
@@ -103,9 +104,9 @@ def test_capture_accepts_iterables_and_deprecated_batch_alias() -> None:
     requests: list[httpx.Request] = []
     client, http = make_client(lambda request: requests.append(request) or success(request))
 
-    client.capture({"event": str(index)} for index in range(2))
+    client.capture({**VALID_EVENT, "event": str(index)} for index in range(2))
     with pytest.deprecated_call(match="capture_batch"):
-        assert client.capture_batch([{"event": "legacy"}]) is None
+        assert client.capture_batch([{**VALID_EVENT, "event": "legacy"}]) is None
     assert requests == []
 
     assert client.flush().accepted == 3
@@ -125,6 +126,7 @@ def test_capture_deeply_snapshots_and_preserves_uuid_override() -> None:
     client, http = make_client(handler)
     nested = {"original": True, "values": [1, 2]}
     event: dict[str, Any] = {
+        **VALID_EVENT,
         "event": "snapshot",
         "event_id": override,
         "properties": nested,
@@ -163,9 +165,9 @@ def test_timer_is_one_shot_from_first_pending_event() -> None:
         flush_interval=0.03,
         http_client=http,
     )
-    client.capture({"event": "first"})
+    client.capture({**VALID_EVENT, "event": "first"})
     first_deadline = client._deadline
-    client.capture({"event": "second"})
+    client.capture({**VALID_EVENT, "event": "second"})
 
     assert client._deadline == first_deadline
     assert called.wait(1)
@@ -185,8 +187,11 @@ def test_10000_pending_events_start_an_immediate_background_drain() -> None:
         assert release.wait(2)
         return success(request)
 
-    client, http = make_client(handler)
-    client.capture({"event": f"threshold-{index}"} for index in range(MAX_BATCH_EVENTS))
+    # Isolate the event-count ceiling from the encoded-byte ceiling.
+    client, http = make_client(handler, compression="gzip")
+    client.capture(
+        {**VALID_EVENT, "event": f"threshold-{index}"} for index in range(MAX_BATCH_EVENTS)
+    )
 
     assert started.wait(2)
     assert len(decoded_events(requests[0])) == MAX_BATCH_EVENTS
@@ -214,8 +219,8 @@ def test_more_than_10000_events_split_into_fixed_ceiling_batches() -> None:
             assert release.wait(2)
         return success(request, str(len(sizes)))
 
-    client, http = make_client(handler)
-    client.capture({"event": f"chunk-{index}"} for index in range(25_001))
+    client, http = make_client(handler, compression="gzip")
+    client.capture({**VALID_EVENT, "event": f"chunk-{index}"} for index in range(25_001))
     assert started.wait(2)
     thread, results, errors = run_in_thread(client.flush)
     time.sleep(0.01)
@@ -237,6 +242,7 @@ def test_batches_split_below_identity_wire_limit() -> None:
     client, http = make_client(lambda request: requests.append(request) or success(request))
     client.capture(
         {
+            **VALID_EVENT,
             "event": f"wire-{index}",
             "properties": {"payload": "x" * 300_000},
         }
@@ -266,6 +272,7 @@ def test_gzip_batches_split_below_decoded_limit() -> None:
     )
     client.capture(
         {
+            **VALID_EVENT,
             "event": f"decoded-{index}",
             "properties": {"payload": "compressible" * 40_000},
         }
@@ -294,11 +301,11 @@ def test_concurrent_flushes_singleflight_and_include_new_captures() -> None:
         return success(request, str(len(requests)))
 
     client, http = make_client(handler)
-    client.capture({"event": "first"})
+    client.capture({**VALID_EVENT, "event": "first"})
     thread_a, results_a, errors_a = run_in_thread(client.flush)
     assert started.wait(2)
     thread_b, results_b, errors_b = run_in_thread(client.flush)
-    client.capture({"event": "during-flight"})
+    client.capture({**VALID_EVENT, "event": "during-flight"})
     release.set()
     thread_a.join(5)
     thread_b.join(5)
@@ -337,11 +344,11 @@ def test_drain_clears_consumed_immediate_trigger_before_next_timer(
         flush_interval=0.05,
         http_client=http,
     )
-    client.capture({"event": "in-flight"})
+    client.capture({**VALID_EVENT, "event": "in-flight"})
     thread, results, errors = run_in_thread(client.flush)
     assert started.wait(2)
 
-    client.capture([{"event": f"queued-{index}"} for index in range(3)])
+    client.capture([{**VALID_EVENT, "event": f"queued-{index}"} for index in range(3)])
     release.set()
     thread.join(5)
 
@@ -351,7 +358,7 @@ def test_drain_clears_consumed_immediate_trigger_before_next_timer(
     assert client._pending_count == 0
     assert not client._immediate
 
-    client.capture({"event": "timer-only"})
+    client.capture({**VALID_EVENT, "event": "timer-only"})
     assert not lone_sent.wait(0.015)
     assert lone_sent.wait(1)
     client.close()
@@ -368,12 +375,12 @@ def test_queue_cap_counts_in_flight_events() -> None:
         return success(request)
 
     client, http = make_client(handler, max_queue_size=2)
-    client.capture([{"event": "one"}, {"event": "two"}])
+    client.capture([{**VALID_EVENT, "event": "one"}, {**VALID_EVENT, "event": "two"}])
     thread, _results, errors = run_in_thread(client.flush)
     assert started.wait(2)
 
     with pytest.raises(ValidationError, match="queue cannot exceed 2"):
-        client.capture({"event": "overflow"})
+        client.capture({**VALID_EVENT, "event": "overflow"})
 
     release.set()
     thread.join(5)
@@ -393,13 +400,13 @@ def test_pending_event_ids_are_atomic_retained_and_reusable_after_ack() -> None:
         return success(request)
 
     client, http = make_client(handler, max_retries=0)
-    client.capture({"event": "original", "event_id": pending_id})
+    client.capture({**VALID_EVENT, "event": "original", "event_id": pending_id})
 
     with pytest.raises(ValidationError, match="unacknowledged"):
         client.capture(
             [
-                {"event": "must-not-queue", "event_id": atomic_id},
-                {"event": "duplicate", "event_id": pending_id},
+                {**VALID_EVENT, "event": "must-not-queue", "event_id": atomic_id},
+                {**VALID_EVENT, "event": "duplicate", "event_id": pending_id},
             ]
         )
     assert client._pending_count == 1
@@ -408,14 +415,14 @@ def test_pending_event_ids_are_atomic_retained_and_reusable_after_ack() -> None:
     with pytest.raises(ServerError):
         client.flush()
     with pytest.raises(ValidationError, match="unacknowledged"):
-        client.capture({"event": "still-duplicate", "event_id": pending_id})
+        client.capture({**VALID_EVENT, "event": "still-duplicate", "event_id": pending_id})
     assert client._pending_event_ids == {pending_id}
 
     failing = False
     assert client.flush().accepted == 1
     assert client._pending_event_ids == set()
 
-    client.capture({"event": "reused-after-ack", "event_id": pending_id})
+    client.capture({**VALID_EVENT, "event": "reused-after-ack", "event_id": pending_id})
     assert client.flush().accepted == 1
     assert client._pending_event_ids == set()
     client.close()
@@ -440,7 +447,7 @@ def test_http_retry_reuses_exact_body_and_uuidv7_key(
     monkeypatch.setattr("trafficwar._client.time.sleep", lambda _seconds: None)
     monkeypatch.setattr("trafficwar._base.random.uniform", lambda _start, _end: 0.0)
     client, http = make_client(handler, max_retries=1)
-    client.capture({"event": "retry", "properties": {"value": "x" * 2000}})
+    client.capture({**VALID_EVENT, "event": "retry", "properties": {"value": "x" * 2000}})
 
     result = client.flush()
 
@@ -482,7 +489,7 @@ def test_background_failure_retains_batch_and_invokes_callback() -> None:
         on_error=on_error,
         http_client=http,
     )
-    client.capture({"event": "retained", "properties": {"n": 1}})
+    client.capture({**VALID_EVENT, "event": "retained", "properties": {"n": 1}})
     assert callback_seen.wait(2)
 
     failing = False
@@ -521,7 +528,7 @@ def test_background_failure_retries_on_a_new_one_shot_timer(
         max_retries=0,
         http_client=http,
     )
-    client.capture({"event": "automatic-retry"})
+    client.capture({**VALID_EVENT, "event": "automatic-retry"})
 
     assert first_failed.wait(2)
     time.sleep(0.01)
@@ -550,7 +557,7 @@ def test_every_manual_flush_resurfaces_retained_failure() -> None:
         return success(request, "recovered")
 
     client, http = make_client(handler, max_retries=0)
-    client.capture({"event": "offline"})
+    client.capture({**VALID_EVENT, "event": "offline"})
 
     with pytest.raises(TransportError):
         client.flush()
@@ -599,7 +606,7 @@ def test_retryable_status_and_rate_limit_mapping_are_preserved(
 
     monkeypatch.setattr("trafficwar._client.time.sleep", lambda _seconds: None)
     client, http = make_client(handler, max_retries=1)
-    client.capture([{"event": "one"}, {"event": "two"}])
+    client.capture([{**VALID_EVENT, "event": "one"}, {**VALID_EVENT, "event": "two"}])
 
     with pytest.raises(RateLimitError) as raised:
         client.flush()
@@ -622,7 +629,7 @@ def test_transport_failure_retains_internal_idempotency_key() -> None:
         return success(request)
 
     client, http = make_client(handler, max_retries=0)
-    client.capture({"event": "timeout"})
+    client.capture({**VALID_EVENT, "event": "timeout"})
 
     with pytest.raises(TransportError) as raised:
         client.flush()
@@ -644,7 +651,7 @@ def test_close_drains_seals_closes_owned_resources_and_is_idempotent() -> None:
         http_client=http,
     )
     client._owns_client = True
-    client.capture({"event": "close"})
+    client.capture({**VALID_EVENT, "event": "close"})
 
     result = client.close()
 
@@ -652,7 +659,7 @@ def test_close_drains_seals_closes_owned_resources_and_is_idempotent() -> None:
     assert client._pending_event_ids == set()
     assert http.is_closed
     with pytest.raises(RuntimeError, match="closed"):
-        client.capture({"event": "late"})
+        client.capture({**VALID_EVENT, "event": "late"})
     assert client.close() == _empty_result()
 
 
@@ -672,12 +679,12 @@ def test_close_rejects_capture_while_in_progress_without_double_send() -> None:
         return success(request)
 
     client, http = make_client(handler)
-    client.capture({"event": "closing"})
+    client.capture({**VALID_EVENT, "event": "closing"})
     thread, results, errors = run_in_thread(client.close)
     assert started.wait(2)
 
     with pytest.raises(RuntimeError, match="closing"):
-        client.capture({"event": "late"})
+        client.capture({**VALID_EVENT, "event": "late"})
 
     release.set()
     thread.join(5)
@@ -698,12 +705,12 @@ def test_failed_close_retains_work_and_remains_retryable() -> None:
         return success(request, str(len(requests)))
 
     client, http = make_client(handler, max_retries=0)
-    client.capture({"event": "before-failed-close"})
+    client.capture({**VALID_EVENT, "event": "before-failed-close"})
 
     with pytest.raises(ServerError):
         client.close()
     assert len(client._pending_event_ids) == 1
-    client.capture({"event": "after-failed-close"})
+    client.capture({**VALID_EVENT, "event": "after-failed-close"})
     assert len(client._pending_event_ids) == 2
 
     failing = False

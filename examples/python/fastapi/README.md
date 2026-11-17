@@ -5,6 +5,11 @@ the enqueue step for an `http` event with the real `GET` method through
 `AsyncTrafficWar`. The handler responds without waiting for delivery and
 captures both successful lookups and `404` responses.
 
+Each event includes all seven required fields, an explicit UTC start timestamp,
+measured non-negative latency, the HTTP method and response status. This example
+emits one server span, so it needs no trace ID; related spans must share a real,
+nonblank trace ID rather than inventing correlation for independent events.
+
 `create_app()` owns a seeded in-memory SQLite connection and, unless one is
 injected, an async TrafficWar client. SQLite work runs in an AnyIO worker thread;
 the shared connection uses `check_same_thread=False` plus a lock.

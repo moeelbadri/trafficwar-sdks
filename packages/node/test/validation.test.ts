@@ -15,6 +15,7 @@ import type {
   TrafficWarFetch,
   TrafficWarOptions,
 } from "../src";
+import { validEvent, validHttpEvent } from "./fixtures";
 
 // Isolate existing event validation/transport assertions from catalog HTTP.
 class TrafficWar extends SDKTrafficWar {
@@ -173,6 +174,7 @@ describe("TrafficWar event validation", () => {
     const source: S3Source = "assets.ovh-s3";
 
     client.capture({
+      ...validEvent,
       event: "s3",
       source,
       operation_type: "s3.get_object",
@@ -192,6 +194,7 @@ describe("TrafficWar event validation", () => {
     const event: EventCategory = "external";
 
     client.capture({
+      ...validEvent,
       event,
       source: "google-routes",
       label: "Route planner",
@@ -214,7 +217,7 @@ describe("TrafficWar event validation", () => {
     (latency_ms) => {
       const client = clientWith(async (_url, init) => success(init));
       expect(() =>
-        client.capture({ event: "latency", latency_ms }),
+        client.capture({ ...validEvent, event: "latency", latency_ms }),
       ).toThrow(
         expect.objectContaining({
           name: "TrafficWarValidationError",
@@ -230,6 +233,7 @@ describe("TrafficWar event validation", () => {
       const client = clientWith(async (_url, init) => success(init));
       expect(() =>
         client.capture({
+          ...validEvent,
           event: "status",
           status_code,
         } as unknown as TrafficWarEvent),
@@ -248,7 +252,7 @@ describe("TrafficWar event validation", () => {
       sent = bodyEvents(init);
       return success(init);
     });
-    const event = { event: "http", http_method };
+    const event = { ...validHttpEvent, http_method };
 
     client.capture(event);
     await client.close();
@@ -272,6 +276,7 @@ describe("TrafficWar event validation", () => {
 
     expect(() =>
       client.capture({
+        ...validHttpEvent,
         event: "http",
         http_method,
       } as unknown as TrafficWarEvent),
@@ -304,6 +309,7 @@ describe("TrafficWar event validation", () => {
     const client = clientWith(async (_url, init) => success(init));
     expect(() =>
       client.capture({
+        ...validEvent,
         event: "timestamp",
         timestamp,
       } as unknown as TrafficWarEvent),
@@ -318,34 +324,22 @@ describe("TrafficWar event validation", () => {
   ])("accepts timestamp value %s", async (timestamp) => {
     const client = clientWith(async (_url, init) => success(init));
     expect(() =>
-      client.capture({ event: "timestamp", timestamp }),
+      client.capture({ ...validEvent, event: "timestamp", timestamp }),
     ).not.toThrow();
     await expect(client.flush()).resolves.toMatchObject({ accepted: 1 });
   });
 
-  it("defaults timestamp to capture time when omitted", async () => {
-    const before = Date.now();
-    let sent: Array<Record<string, unknown>> = [];
-    const client = new TrafficWar({
-      apiKey: "tw_default_ts",
-      compression: "none",
-      fetch: async (_url, init) => {
-        sent = bodyEvents(init);
-        return success(init);
-      },
-    });
-    const event = { event: "now" };
+  it("rejects an omitted timestamp rather than inventing capture time", async () => {
+    const fetch = vi.fn(async (_url, init) => success(init));
+    const client = clientWith(fetch);
+    const { timestamp: _timestamp, ...event } = validEvent;
 
-    client.capture(event);
-    await client.flush();
-    const after = Date.now();
-
+    expect(() => client.capture(event as TrafficWarEvent)).toThrow(
+      expect.objectContaining({ path: "event.timestamp" }),
+    );
     expect(event).not.toHaveProperty("timestamp");
-    expect(typeof sent[0]?.timestamp).toBe("string");
-    const parsed = Date.parse(String(sent[0]?.timestamp));
-    expect(Number.isFinite(parsed)).toBe(true);
-    expect(parsed).toBeGreaterThanOrEqual(before);
-    expect(parsed).toBeLessThanOrEqual(after);
+    await expect(client.close()).resolves.toEqual({ accepted: 0, batches: [] });
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -356,7 +350,7 @@ describe("TrafficWar event validation", () => {
   ])("rejects invalid event_id %s", (event_id) => {
     const client = clientWith(async (_url, init) => success(init));
     expect(() =>
-      client.capture({ event: "id", event_id }),
+      client.capture({ ...validEvent, event: "id", event_id }),
     ).toThrow(expect.objectContaining({ path: "event.event_id" }));
   });
 
@@ -366,6 +360,7 @@ describe("TrafficWar event validation", () => {
       const client = clientWith(async (_url, init) => success(init));
       expect(() =>
         client.capture({
+          ...validEvent,
           event: "span",
           span_kind,
         } as unknown as TrafficWarEvent),
@@ -379,6 +374,7 @@ describe("TrafficWar event validation", () => {
       const client = clientWith(async (_url, init) => success(init));
       expect(() =>
         client.capture({
+          ...validEvent,
           event: "identity",
           [field]: "forged",
         } as unknown as TrafficWarEvent),
@@ -390,6 +386,7 @@ describe("TrafficWar event validation", () => {
     const client = clientWith(async (_url, init) => success(init));
     expect(() =>
       client.capture({
+        ...validEvent,
         event: "types",
         trace_id: 123,
       } as unknown as TrafficWarEvent),
@@ -408,6 +405,7 @@ describe("TrafficWar event validation", () => {
       { three: false },
     ];
     client.capture({
+      ...validEvent,
       event: "json",
       properties: {
         nullable: null,
@@ -432,6 +430,7 @@ describe("TrafficWar event validation", () => {
 
     expect(() =>
       client.capture({
+        ...validEvent,
         event: "circular",
         properties,
       } as unknown as TrafficWarEvent),
@@ -447,6 +446,7 @@ describe("TrafficWar event validation", () => {
     const client = clientWith(async (_url, init) => success(init));
     expect(() =>
       client.capture({
+        ...validEvent,
         event: "not-json",
         properties: { value },
       } as unknown as TrafficWarEvent),
@@ -469,6 +469,7 @@ describe("TrafficWar event validation", () => {
     });
 
     client.capture({
+      ...validEvent,
       event: "getter",
       properties,
     } as TrafficWarEvent);
@@ -500,8 +501,8 @@ describe("TrafficWar array and queue validation", () => {
     const client = clientWith(async (_url, init) => success(init));
     expect(() =>
       client.capture([
-        { event: "valid" },
-        { event: "", latency_ms: 1 },
+        { ...validEvent, event: "valid" },
+        { ...validEvent, event: "", latency_ms: 1 },
       ]),
     ).toThrow(expect.objectContaining({ path: "events[1].event" }));
   });
@@ -510,8 +511,8 @@ describe("TrafficWar array and queue validation", () => {
     const fetch = vi.fn(async (_url, init) => success(init));
     const client = clientWith(fetch);
     const events = new Array<TrafficWarEvent>(3);
-    events[0] = { event: "first" };
-    events[2] = { event: "third" };
+    events[0] = { ...validEvent, event: "first" };
+    events[2] = { ...validEvent, event: "third" };
 
     expect(() => client.capture(events)).toThrow(
       expect.objectContaining({
@@ -528,8 +529,8 @@ describe("TrafficWar array and queue validation", () => {
 
     expect(() =>
       client.capture([
-        { event: "one", event_id },
-        { event: "two", event_id },
+        { ...validEvent, event: "one", event_id },
+        { ...validEvent, event: "two", event_id },
       ]),
     ).toThrow(
       expect.objectContaining({ path: "events[1].event_id" }),
@@ -544,12 +545,12 @@ describe("TrafficWar array and queue validation", () => {
       calls.push(init);
       return success(init);
     });
-    client.capture({ event: "pending", event_id: pendingId });
+    client.capture({ ...validEvent, event: "pending", event_id: pendingId });
 
     expect(() =>
       client.capture([
-        { event: "must-not-stage", event_id: stagedId },
-        { event: "duplicate", event_id: pendingId },
+        { ...validEvent, event: "must-not-stage", event_id: stagedId },
+        { ...validEvent, event: "duplicate", event_id: pendingId },
       ]),
     ).toThrow(
       expect.objectContaining({ path: "events[1].event_id" }),
@@ -562,8 +563,8 @@ describe("TrafficWar array and queue validation", () => {
 
     expect(() =>
       client.capture([
-        { event: "reuse-delivered", event_id: pendingId },
-        { event: "atomic-id-was-not-reserved", event_id: stagedId },
+        { ...validEvent, event: "reuse-delivered", event_id: pendingId },
+        { ...validEvent, event: "atomic-id-was-not-reserved", event_id: stagedId },
       ]),
     ).not.toThrow();
     await expect(client.flush()).resolves.toMatchObject({ accepted: 2 });
@@ -580,10 +581,10 @@ describe("TrafficWar array and queue validation", () => {
         return success(init);
       },
     });
-    client.capture([{ event: "one" }, { event: "two" }]);
+    client.capture([{ ...validEvent, event: "one" }, { ...validEvent, event: "two" }]);
 
     expect(() =>
-      client.capture([{ event: "three" }, { event: "four" }]),
+      client.capture([{ ...validEvent, event: "three" }, { ...validEvent, event: "four" }]),
     ).toThrow(expect.objectContaining({ path: "queue" }));
 
     const result = await client.flush();
@@ -600,6 +601,7 @@ describe("TrafficWar array and queue validation", () => {
       fetch,
     });
     client.capture({
+      ...validEvent,
       event: "too-large",
       properties: {
         payload: "x".repeat(TRAFFICWAR_MAX_COMPRESSED_BODY_BYTES),

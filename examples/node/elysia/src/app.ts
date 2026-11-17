@@ -63,6 +63,7 @@ export function createApp(trafficwar: TrafficWar) {
       return undefined;
     })
     .get("/hello/:name", ({ params, request, set }) => {
+      const timestamp = new Date();
       const requestStartedAt = performance.now();
       const queryStartedAt = performance.now();
       const row = greetings.findByName(params.name);
@@ -80,6 +81,7 @@ export function createApp(trafficwar: TrafficWar) {
         span_kind: "server",
         operation_type: "route.handler",
         status_code: statusCode,
+        timestamp,
         latency_ms: performance.now() - requestStartedAt,
         properties: {
           row_id: row?.id ?? null,

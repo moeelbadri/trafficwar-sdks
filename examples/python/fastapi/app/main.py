@@ -4,6 +4,7 @@ import logging
 import os
 import sqlite3
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from threading import Lock
 from time import perf_counter
 from typing import Annotated
@@ -136,6 +137,7 @@ def create_app(
         store: GreetingStoreDep,
         telemetry: TrafficWarDep,
     ) -> dict[str, str]:
+        started_at = datetime.now(timezone.utc)
         started = perf_counter()
         message = await anyio.to_thread.run_sync(store.lookup, name)
         latency_ms = (perf_counter() - started) * 1_000
@@ -144,6 +146,7 @@ def create_app(
 
         event: Event = {
             "event": "http",
+            "timestamp": started_at,
             "distinct_id": name,
             "path": "/hello/{name}",
             "http_method": request.method,

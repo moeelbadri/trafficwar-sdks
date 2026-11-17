@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from time import perf_counter
 
 from django.http import HttpRequest, JsonResponse
@@ -10,6 +11,7 @@ from .telemetry import get_trafficwar_client
 
 @require_GET
 def hello(request: HttpRequest, name: str) -> JsonResponse:
+    started_at = datetime.now(timezone.utc)
     started = perf_counter()
     message = (
         Greeting.objects.filter(name=name).values_list("message", flat=True).first()
@@ -20,6 +22,7 @@ def hello(request: HttpRequest, name: str) -> JsonResponse:
 
     event: Event = {
         "event": "http",
+        "timestamp": started_at,
         "distinct_id": name,
         "path": "/hello/{name}/",
         "http_method": request.method,

@@ -242,9 +242,10 @@ class BaseTrafficWar:
             raise ValidationError(f"{prefix} contains unsupported field(s): {names}")
 
         normalized = dict(event)
-        name = normalized.get("event")
-        if not isinstance(name, str) or not name.strip():
-            raise ValidationError(f"{prefix}.event must be a non-empty string")
+        for field in ("event", "label", "source", "operation_type"):
+            value = normalized.get(field)
+            if not isinstance(value, str) or not value.strip():
+                raise ValidationError(f"{prefix}.{field} must be a nonblank string")
 
         for field in STRING_FIELDS:
             if field in normalized and not isinstance(normalized[field], str):
@@ -258,6 +259,18 @@ class BaseTrafficWar:
                 )
             normalized["http_method"] = http_method
 
+        category = normalized["event"].strip().lower()
+        if category == "http" and "http_method" not in normalized:
+            raise ValidationError(f"{prefix}.http_method is required for HTTP events")
+        if (
+            (category == "http" or (category == "external" and "http_method" in normalized))
+            and "status_code" not in normalized
+            and not any(normalized.get(field, "").strip() for field in ("error", "error_code"))
+        ):
+            raise ValidationError(
+                f"{prefix}.status_code or nonblank error/error_code is required for HTTP"
+            )
+
         if "event_id" in normalized:
             event_id = cast(str, normalized["event_id"])
             try:
@@ -269,10 +282,9 @@ class BaseTrafficWar:
         else:
             normalized["event_id"] = uuid7()
 
-        if "latency_ms" in normalized:
-            latency = normalized["latency_ms"]
-            if not self._is_finite_number(latency):
-                raise ValidationError(f"{prefix}.latency_ms must be a finite number")
+        latency = normalized.get("latency_ms")
+        if latency is None or not self._is_finite_number(latency) or latency < 0:
+            raise ValidationError(f"{prefix}.latency_ms must be a finite non-negative number")
 
         if "status_code" in normalized:
             status_code = normalized["status_code"]
@@ -285,18 +297,14 @@ class BaseTrafficWar:
                     f"{prefix}.status_code must be an integer from 0 through 65535"
                 )
 
-        if "span_kind" in normalized:
-            span_kind = normalized["span_kind"]
-            if not isinstance(span_kind, str) or span_kind not in SPAN_KINDS:
-                allowed = ", ".join(sorted(SPAN_KINDS))
-                raise ValidationError(f"{prefix}.span_kind must be one of: {allowed}")
+        span_kind = normalized.get("span_kind")
+        if not isinstance(span_kind, str) or span_kind not in SPAN_KINDS:
+            allowed = ", ".join(sorted(SPAN_KINDS))
+            raise ValidationError(f"{prefix}.span_kind must be one of: {allowed}")
 
-        if "timestamp" in normalized:
-            normalized["timestamp"] = self._normalize_timestamp(
-                normalized["timestamp"], prefix=prefix
-            )
-        else:
-            normalized["timestamp"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        normalized["timestamp"] = self._normalize_timestamp(
+            normalized.get("timestamp"), prefix=prefix
+        )
         try:
             serialized = json.dumps(
                 normalized,

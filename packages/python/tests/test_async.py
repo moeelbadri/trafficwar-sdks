@@ -9,6 +9,7 @@ from typing import Any
 import httpx
 import pytest
 
+from event_fixture import VALID_EVENT
 from trafficwar import (
     MAX_BATCH_EVENTS,
     MAX_ENCODED_BODY_BYTES,
@@ -50,7 +51,7 @@ def make_client(
     http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     client = AsyncTrafficWar(
         "async-key",
-        compression="none",
+        compression=kwargs.pop("compression", "none"),
         flush_interval=60,
         http_client=http,
         **kwargs,
@@ -69,7 +70,7 @@ async def test_async_capture_only_enqueues_then_flushes_one_bare_array() -> None
     client, http = make_client(handler)
     assert client._worker_task is None
 
-    result = await client.capture({"event": "async", "status_code": 204})
+    result = await client.capture({**VALID_EVENT, "event": "async", "status_code": 204})
 
     assert result is None
     assert requests == []
@@ -95,9 +96,9 @@ async def test_async_capture_accepts_generator_and_deprecated_alias() -> None:
         return success(request)
 
     client, http = make_client(handler)
-    await client.capture({"event": str(index)} for index in range(2))
+    await client.capture({**VALID_EVENT, "event": str(index)} for index in range(2))
     with pytest.deprecated_call(match="capture_batch"):
-        assert await client.capture_batch([{"event": "legacy"}]) is None
+        assert await client.capture_batch([{**VALID_EVENT, "event": "legacy"}]) is None
 
     result = await client.flush()
     assert result.accepted == 3
@@ -133,7 +134,7 @@ async def test_async_preparation_runs_off_loop_and_snapshots_input(
 
     client, http = make_client(handler)
     nested = {"values": [1, 2]}
-    event = {"event": "snapshot", "properties": nested}
+    event = {**VALID_EVENT, "event": "snapshot", "properties": nested}
     await client.capture(event)
     event["event"] = "mutated"
     nested["values"].append(3)
@@ -164,9 +165,9 @@ async def test_async_timer_uses_first_pending_deadline() -> None:
         flush_interval=0.02,
         http_client=http,
     )
-    await client.capture({"event": "first"})
+    await client.capture({**VALID_EVENT, "event": "first"})
     first_deadline = client._deadline
-    await client.capture({"event": "second"})
+    await client.capture({**VALID_EVENT, "event": "second"})
 
     assert client._deadline == first_deadline
     await asyncio.wait_for(called.wait(), timeout=1)
@@ -187,8 +188,11 @@ async def test_async_10000_threshold_starts_background_without_blocking_capture(
         await release.wait()
         return success(request)
 
-    client, http = make_client(handler)
-    await client.capture({"event": f"threshold-{index}"} for index in range(MAX_BATCH_EVENTS))
+    # Isolate the event-count ceiling from the encoded-byte ceiling.
+    client, http = make_client(handler, compression="gzip")
+    await client.capture(
+        {**VALID_EVENT, "event": f"threshold-{index}"} for index in range(MAX_BATCH_EVENTS)
+    )
     await asyncio.wait_for(started.wait(), timeout=2)
     assert len(decoded_events(requests[0])) == MAX_BATCH_EVENTS
 
@@ -213,8 +217,8 @@ async def test_async_inputs_over_10000_split_and_aggregate() -> None:
             await release.wait()
         return success(request, str(len(sizes)))
 
-    client, http = make_client(handler)
-    await client.capture({"event": f"chunk-{index}"} for index in range(10_001))
+    client, http = make_client(handler, compression="gzip")
+    await client.capture({**VALID_EVENT, "event": f"chunk-{index}"} for index in range(10_001))
     await asyncio.wait_for(started.wait(), timeout=2)
     flushing = asyncio.create_task(client.flush())
     await asyncio.sleep(0)
@@ -238,6 +242,7 @@ async def test_async_wire_size_splitting() -> None:
     client, http = make_client(handler)
     await client.capture(
         {
+            **VALID_EVENT,
             "event": f"wire-{index}",
             "properties": {"payload": "x" * 300_000},
         }
@@ -267,12 +272,12 @@ async def test_async_concurrent_flush_singleflight_and_capture_during_send() -> 
         return success(request, str(len(requests)))
 
     client, http = make_client(handler)
-    await client.capture({"event": "first"})
+    await client.capture({**VALID_EVENT, "event": "first"})
     first = asyncio.create_task(client.flush())
     await asyncio.wait_for(started.wait(), timeout=1)
     second = asyncio.create_task(client.flush())
     await asyncio.sleep(0)
-    await client.capture({"event": "during-flight"})
+    await client.capture({**VALID_EVENT, "event": "during-flight"})
     release.set()
     result_a, result_b = await asyncio.gather(first, second)
 
@@ -310,11 +315,11 @@ async def test_async_drain_clears_consumed_immediate_before_next_timer(
         flush_interval=0.05,
         http_client=http,
     )
-    await client.capture({"event": "in-flight"})
+    await client.capture({**VALID_EVENT, "event": "in-flight"})
     flushing = asyncio.create_task(client.flush())
     await asyncio.wait_for(started.wait(), timeout=1)
 
-    await client.capture([{"event": f"queued-{index}"} for index in range(3)])
+    await client.capture([{**VALID_EVENT, "event": f"queued-{index}"} for index in range(3)])
     release.set()
     result = await flushing
 
@@ -323,7 +328,7 @@ async def test_async_drain_clears_consumed_immediate_before_next_timer(
     assert client._pending_count == 0
     assert not client._immediate
 
-    await client.capture({"event": "timer-only"})
+    await client.capture({**VALID_EVENT, "event": "timer-only"})
     with pytest.raises(asyncio.TimeoutError):
         await asyncio.wait_for(lone_sent.wait(), timeout=0.015)
     await asyncio.wait_for(lone_sent.wait(), timeout=1)
@@ -342,12 +347,12 @@ async def test_async_queue_cap_includes_in_flight() -> None:
         return success(request)
 
     client, http = make_client(handler, max_queue_size=2)
-    await client.capture([{"event": "one"}, {"event": "two"}])
+    await client.capture([{**VALID_EVENT, "event": "one"}, {**VALID_EVENT, "event": "two"}])
     flushing = asyncio.create_task(client.flush())
     await asyncio.wait_for(started.wait(), timeout=1)
 
     with pytest.raises(ValidationError, match="queue cannot exceed 2"):
-        await client.capture({"event": "overflow"})
+        await client.capture({**VALID_EVENT, "event": "overflow"})
 
     release.set()
     await flushing
@@ -367,13 +372,13 @@ async def test_async_pending_ids_are_atomic_retained_and_reusable() -> None:
         return success(request)
 
     client, http = make_client(handler, max_retries=0)
-    await client.capture({"event": "original", "event_id": pending_id})
+    await client.capture({**VALID_EVENT, "event": "original", "event_id": pending_id})
 
     with pytest.raises(ValidationError, match="unacknowledged"):
         await client.capture(
             [
-                {"event": "must-not-queue", "event_id": atomic_id},
-                {"event": "duplicate", "event_id": pending_id},
+                {**VALID_EVENT, "event": "must-not-queue", "event_id": atomic_id},
+                {**VALID_EVENT, "event": "duplicate", "event_id": pending_id},
             ]
         )
     assert client._pending_count == 1
@@ -382,14 +387,14 @@ async def test_async_pending_ids_are_atomic_retained_and_reusable() -> None:
     with pytest.raises(ServerError):
         await client.flush()
     with pytest.raises(ValidationError, match="unacknowledged"):
-        await client.capture({"event": "still-duplicate", "event_id": pending_id})
+        await client.capture({**VALID_EVENT, "event": "still-duplicate", "event_id": pending_id})
     assert client._pending_event_ids == {pending_id}
 
     failing = False
     assert (await client.flush()).accepted == 1
     assert client._pending_event_ids == set()
 
-    await client.capture({"event": "reused-after-ack", "event_id": pending_id})
+    await client.capture({**VALID_EVENT, "event": "reused-after-ack", "event_id": pending_id})
     assert (await client.flush()).accepted == 1
     assert client._pending_event_ids == set()
     await client.aclose()
@@ -418,7 +423,7 @@ async def test_async_http_retry_reuses_exact_body_and_key(
     monkeypatch.setattr("trafficwar._async_client.asyncio.sleep", no_sleep)
     monkeypatch.setattr("trafficwar._base.random.uniform", lambda _start, _end: 0.0)
     client, http = make_client(handler, max_retries=1)
-    await client.capture({"event": "retry"})
+    await client.capture({**VALID_EVENT, "event": "retry"})
 
     result = await client.flush()
 
@@ -455,7 +460,7 @@ async def test_async_background_failure_retains_batch_and_calls_on_error() -> No
         on_error=on_error,
         http_client=http,
     )
-    await client.capture({"event": "retained"})
+    await client.capture({**VALID_EVENT, "event": "retained"})
     await asyncio.wait_for(error_seen.wait(), timeout=1)
 
     failing = False
@@ -494,7 +499,7 @@ async def test_async_background_failure_retries_on_new_timer(
         max_retries=0,
         http_client=http,
     )
-    await client.capture({"event": "automatic-retry"})
+    await client.capture({**VALID_EVENT, "event": "automatic-retry"})
 
     await asyncio.wait_for(first_failed.wait(), timeout=1)
     await asyncio.sleep(0.01)
@@ -524,7 +529,7 @@ async def test_async_every_flush_resurfaces_retained_transport_failure() -> None
         return success(request)
 
     client, http = make_client(handler, max_retries=0)
-    await client.capture({"event": "offline"})
+    await client.capture({**VALID_EVENT, "event": "offline"})
 
     with pytest.raises(TransportError):
         await client.flush()
@@ -552,19 +557,19 @@ async def test_async_aclose_joins_inflight_and_rejects_new_capture() -> None:
         return success(request)
 
     client, http = make_client(handler)
-    await client.capture({"event": "closing"})
+    await client.capture({**VALID_EVENT, "event": "closing"})
     closing = asyncio.create_task(client.aclose())
     await asyncio.wait_for(started.wait(), timeout=1)
 
     with pytest.raises(RuntimeError, match="closing"):
-        await client.capture({"event": "late"})
+        await client.capture({**VALID_EVENT, "event": "late"})
 
     release.set()
     assert (await closing).accepted == 1
     assert client._pending_event_ids == set()
     assert len(requests) == 1
     with pytest.raises(RuntimeError, match="closed"):
-        await client.capture({"event": "closed"})
+        await client.capture({**VALID_EVENT, "event": "closed"})
     await http.aclose()
 
 
@@ -580,12 +585,12 @@ async def test_async_failed_aclose_is_retryable_and_keeps_batch_stable() -> None
         return success(request, str(len(requests)))
 
     client, http = make_client(handler, max_retries=0)
-    await client.capture({"event": "before"})
+    await client.capture({**VALID_EVENT, "event": "before"})
 
     with pytest.raises(ServerError):
         await client.aclose()
     assert len(client._pending_event_ids) == 1
-    await client.capture({"event": "after"})
+    await client.capture({**VALID_EVENT, "event": "after"})
     assert len(client._pending_event_ids) == 2
 
     failing = False

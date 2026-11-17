@@ -5,6 +5,11 @@ A minimal Django 5.2 application that reads a greeting from SQLite, enqueues an
 and responds without waiting for delivery. Both successful lookups and `404`
 responses are captured.
 
+Each event includes all seven required fields, an explicit UTC start timestamp,
+measured non-negative latency, the HTTP method and response status. This example
+emits one server span, so it needs no trace ID; related spans must share a real,
+nonblank trace ID rather than inventing correlation for independent events.
+
 The initial migration creates the `Greeting` table and seeds:
 
 ```text

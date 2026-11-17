@@ -52,12 +52,13 @@ export type S3Source = OpenString<
 export interface TrafficWarEvent {
   event: EventCategory;
   event_id?: string;
-  /** RFC3339 string, epoch milliseconds, or Date. Defaults to capture time. */
-  timestamp?: string | number | Date;
-  latency_ms?: number;
+  /** Actual span start: RFC3339 string, integer epoch milliseconds, or Date. */
+  timestamp: string | number | Date;
+  /** Measured duration; finite and nonnegative. */
+  latency_ms: number;
   properties?: JsonValue;
   user_agent?: string;
-  label?: string;
+  label: string;
   ip?: string;
   /**
    * Stable emitter or dependency alias. External-service stations are keyed by
@@ -65,20 +66,20 @@ export interface TrafficWarEvent {
    * `<bucket>.<provider>` such as `assets.ovh-s3` when separate bucket stations
    * are useful. Put the concrete action in `operation_type`.
    */
-  source?: string;
+  source: string;
   country?: string;
   city?: string;
   trace_id?: string;
   distinct_id?: string;
   path?: string;
-  /** RFC HTTP token, normalized to uppercase after trimming. */
+  /** Required for HTTP events. RFC HTTP token, normalized to uppercase after trimming. */
   http_method?: string;
   error?: string;
   exception?: string;
   error_code?: string;
-  span_kind?: SpanKind;
+  span_kind: SpanKind;
   /** Concrete work performed, such as `route.handler` or `google.routes.compute`. */
-  operation_type?: OperationType;
+  operation_type: OperationType;
   status_code?: number;
 }
 

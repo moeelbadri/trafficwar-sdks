@@ -21,16 +21,15 @@ application. Installing the package alone does not capture requests.
   or flush the shared client on every request. Do not exit before shutdown finishes.
 - Omit `event_id` to use the generated UUIDv7. Do not reuse IDs across
   distinct events. Spans share `trace_id`, not `event_id`.
+- Supply `event`, `label`, `source`, `operation_type`, `span_kind`, `timestamp`, and `latency_ms` on every event. Identity strings must be non-blank; latency must be finite and nonnegative. Record the actual start before work and measure duration with a monotonic clock; there is no timestamp default. Do not fill missing measurements with capture time or zero to pass validation.
+- HTTP events require `http_method`. HTTP events and `external` events carrying `http_method` require the actual `status_code`, or a non-blank `error`/`error_code` when no response exists. Include the method on outbound HTTP calls; do not omit it to bypass outcome validation.
 
 ## Automatic observed pairs
 
 - Accepted captures automatically discover exact event/label pairs. Captured
   values are never rewritten or pinned to a code location. A shared wrapper
   can send different categories and labels on every call, as can batch slots.
-- Only an entire call that passes event validation, duplicate-ID checks and
-  queue capacity teaches pairs. Missing labels and strings unsuitable for the
-  catalog do not block otherwise valid event delivery. Event validation is
-  unchanged: supplied non-string labels are still invalid event fields.
+- Only an entire call that passes event validation, duplicate-ID checks and queue capacity teaches pairs. Missing, blank, and non-string labels fail validation. Non-blank strings exceeding catalog limits still deliver events but do not register pairs.
 - Register only non-blank event/label strings, at most 128 Unicode code points
   each, with no control characters. Preserve case and whitespace exactly;
   identity is the pair, not a concatenation of its values or their cross product.
@@ -109,10 +108,9 @@ trafficwar.capture({
 
 ## Traces and errors
 
-- Spans for one request share `trace_id` and `label`. Measure durations with
+- Spans for one request must share a non-blank `trace_id` and the same `label`; propagate one request-level ID, never generate an independent ID for each span. Standalone events may omit `trace_id`; a batch alone does not imply a trace. Measure durations with
   a monotonic clock; `timestamp` is the actual span start as a `Date`, RFC3339
-  string, or integer epoch milliseconds. If captured after completion,
-  default capture-time timestamps do not describe the span's start.
+  string, or integer epoch milliseconds, not capture time after completion.
 - Keep inclusive durations nested. Emit dependency spans first, then the
   server span, then an edge span if one was actually measured. Do not invent
   browser latency or emit a synthetic edge span solely to populate the map.

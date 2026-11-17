@@ -64,6 +64,7 @@ export function createApp(trafficwar: TrafficWar): ExpressExample {
   app.disable("x-powered-by");
 
   app.get("/hello/:name", (request, response) => {
+    const timestamp = new Date();
     const requestStartedAt = performance.now();
     const queryStartedAt = performance.now();
     const row = greetings.findByName(request.params.name);
@@ -81,6 +82,7 @@ export function createApp(trafficwar: TrafficWar): ExpressExample {
       span_kind: "server",
       operation_type: "route.handler",
       status_code: statusCode,
+      timestamp,
       latency_ms: performance.now() - requestStartedAt,
       properties: {
         row_id: row?.id ?? null,

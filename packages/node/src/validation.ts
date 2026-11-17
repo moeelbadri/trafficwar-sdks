@@ -301,15 +301,17 @@ export function normalizeEvent(
     }
   }
 
-  if (
-    typeof normalized.event !== "string" ||
-    normalized.event.trim().length === 0
-  ) {
-    throw validationError(
-      `${path}.event must be a non-empty string`,
-      `${path}.event`,
-      idempotencyKey,
-    );
+  for (const field of ["event", "label", "source", "operation_type"] as const) {
+    if (
+      typeof normalized[field] !== "string" ||
+      normalized[field].trim().length === 0
+    ) {
+      throw validationError(
+        `${path}.${field} must be a non-empty string`,
+        `${path}.${field}`,
+        idempotencyKey,
+      );
+    }
   }
 
   for (const field of FORBIDDEN_IDENTITY_FIELDS) {
@@ -335,23 +337,19 @@ export function normalizeEvent(
     }
   }
 
-  if (Object.hasOwn(normalized, "timestamp")) {
-    normalized.timestamp = normalizeTimestamp(
-      normalized.timestamp,
-      `${path}.timestamp`,
-      idempotencyKey,
-    );
-  } else {
-    normalized.timestamp = new Date().toISOString();
-  }
+  normalized.timestamp = normalizeTimestamp(
+    normalized.timestamp,
+    `${path}.timestamp`,
+    idempotencyKey,
+  );
 
   if (
-    Object.hasOwn(normalized, "latency_ms") &&
-    (typeof normalized.latency_ms !== "number" ||
-      !Number.isFinite(normalized.latency_ms))
+    typeof normalized.latency_ms !== "number" ||
+    !Number.isFinite(normalized.latency_ms) ||
+    normalized.latency_ms < 0
   ) {
     throw validationError(
-      `${path}.latency_ms must be a finite number`,
+      `${path}.latency_ms must be a finite nonnegative number`,
       `${path}.latency_ms`,
       idempotencyKey,
     );
@@ -371,7 +369,8 @@ export function normalizeEvent(
     );
   }
 
-  if (httpMethodProvided) {
+  const category = (normalized.event as string).trim().toLowerCase();
+  if (httpMethodProvided || category === "http") {
     normalized.http_method = normalizeHttpMethod(
       normalized.http_method,
       `${path}.http_method`,
@@ -393,13 +392,25 @@ export function normalizeEvent(
   }
 
   if (
-    Object.hasOwn(normalized, "span_kind") &&
-    (typeof normalized.span_kind !== "string" ||
-      !SPAN_KINDS.has(normalized.span_kind))
+    typeof normalized.span_kind !== "string" ||
+    !SPAN_KINDS.has(normalized.span_kind)
   ) {
     throw validationError(
       `${path}.span_kind must be server, client, producer, consumer, or internal`,
       `${path}.span_kind`,
+      idempotencyKey,
+    );
+  }
+
+  if (
+    (category === "http" || (category === "external" && httpMethodProvided)) &&
+    !Object.hasOwn(normalized, "status_code") &&
+    !(typeof normalized.error === "string" && normalized.error.trim()) &&
+    !(typeof normalized.error_code === "string" && normalized.error_code.trim())
+  ) {
+    throw validationError(
+      `${path}.status_code is required for HTTP responses; use error or error_code for a failure without a response`,
+      `${path}.status_code`,
       idempotencyKey,
     );
   }

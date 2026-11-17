@@ -11,11 +11,12 @@ instrumentation. Framework integration examples live under `examples/`.
   guidance from dependencies automatically; link it from the application's
   own `AGENTS.md` when integrating the SDK.
 - For Python, read `packages/python/README.md` and the actual installed
-  version's API. The repository's automatic-batching Python API is still
-  unreleased; do not assume `pip install trafficwar` exposes it.
+  version's API. Automatic batching and required complete event inputs need
+  Python SDK 2.0.0 or newer; do not assume an older installation exposes them.
 - Keep `event` and `label` stable across requests. Use the canonical taxonomy
   and trace rules in the package README. Never put request IDs or user data
   into labels or dependency aliases.
+- Both SDKs require `event`, `label`, `source`, `operation_type`, `span_kind`, `timestamp`, and `latency_ms`. Supply non-blank identity strings, actual span starts, and finite nonnegative measured durations; do not synthesize measurements to pass validation. HTTP events require a method; HTTP and external-with-method events require a response status or a non-blank error/error_code for failures without a response. Related spans share one non-blank trace ID; standalone events may omit it.
 - Node automatically registers exact observed event/label pairs only after
   successful capture validation and queue acceptance. Values are never pinned
   to a code location or rewritten. Use one long-lived client per service/key.

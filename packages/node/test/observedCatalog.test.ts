@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { TrafficWar, TrafficWarValidationError } from "../src";
 import type { TrafficWarEvent, TrafficWarOptions } from "../src";
 import { ObservedCatalog, type CatalogPair } from "../src/observedCatalog";
+import { validEvent, validHttpEvent } from "./fixtures";
 
 const pair = (event: string, label: string): CatalogPair => ({ event, label, station_known: false });
 const response = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
@@ -174,47 +175,61 @@ describe("observed capture integration", () => {
     const { sdk, events, posts } = client();
     const work = (input: TrafficWarEvent) => sdk.capture(input);
     expect(posts).toEqual([]);
-    const first = { event: "database", label: "Checkout", properties: { secret: "private" }, source: "db", span_kind: "client" as const };
+    const first = { ...validEvent, event: "database", label: "Checkout", properties: { secret: "private" }, source: "db", span_kind: "client" as const };
     work(first);
     first.label = "Mutation";
     first.properties.secret = "changed";
-    work({ event: "redis", label: "Different" });
-    sdk.captureBatch([{ event: "s3", label: "Upload" }, { event: "http", label: "Home" }]);
-    sdk.captureBatch([{ event: "http", label: "Home" }, { event: "s3", label: "Upload" }]);
+    work({ ...validEvent, event: "redis", label: "Different" });
+    sdk.captureBatch([{ ...validEvent, event: "s3", label: "Upload" }, { ...validHttpEvent, label: "Home" }]);
+    sdk.captureBatch([{ ...validHttpEvent, label: "Home" }, { ...validEvent, event: "s3", label: "Upload" }]);
     expect((await sdk.flush()).accepted).toBe(6);
     expect(events.map(e => [e.event, e.label])).toEqual([
       ["database", "Checkout"], ["redis", "Different"], ["s3", "Upload"], ["http", "Home"], ["http", "Home"], ["s3", "Upload"],
     ]);
     expect(events[0]!.properties).toEqual({ secret: "private" });
     expect(posts).toEqual([[pair("database", "Checkout"), pair("redis", "Different"), pair("s3", "Upload"), pair("http", "Home")]]);
-    work({ event: "database", label: "Checkout" });
-    work({ event: "external", label: "Delta" });
+    work({ ...validEvent, event: "database", label: "Checkout" });
+    work({ ...validEvent, event: "external", label: "Delta" });
     await sdk.close();
     expect(posts[1]).toEqual([pair("external", "Delta")]);
   });
 
-  it("accepts missing/catalog-invalid strings unchanged but registers no malformed identity", async () => {
+  it("rejects missing/blank labels without delivery or catalog discovery", async () => {
     const { sdk, posts, events } = client();
-    const invalidLabels = [undefined, "", "   ", "Home\n", "Home\u0085", "x".repeat(129)];
-    for (const label of invalidLabels) sdk.capture({ event: "http", ...(label === undefined ? {} : { label }) });
-    sdk.capture({ event: "e".repeat(129), label: "Long event" });
-    sdk.capture({ event: "http\n", label: "Control event" });
-    sdk.capture({ event: "😀".repeat(128), label: "😀".repeat(128) });
-    expect((await sdk.close()).accepted).toBe(9);
-    expect(events.slice(0, 6).map(e => e.label)).toEqual(invalidLabels);
+    const { label: _label, ...missingLabel } = validHttpEvent;
+    expect(() => sdk.capture(missingLabel as TrafficWarEvent)).toThrow(TrafficWarValidationError);
+    for (const label of ["", "   ", "\t\n"]) {
+      expect(() => sdk.capture({ ...validHttpEvent, label })).toThrow(TrafficWarValidationError);
+    }
+    expect((await sdk.close()).accepted).toBe(0);
+    expect(events).toEqual([]);
+    expect(posts).toEqual([]);
+  });
+
+  it("delivers long/control strings unchanged but registers no malformed identity", async () => {
+    const { sdk, posts, events } = client();
+    const invalidLabels = ["Home\n", "Home\u0085", "x".repeat(129)];
+    for (const label of invalidLabels) sdk.capture({ ...validHttpEvent, label });
+    sdk.capture({ ...validEvent, event: "e".repeat(129), label: "Long event" });
+    sdk.capture({ ...validHttpEvent, event: "http\n", label: "Control event" });
+    sdk.capture({ ...validEvent, event: "😀".repeat(128), label: "😀".repeat(128) });
+    expect((await sdk.close()).accepted).toBe(6);
+    expect(events.slice(0, 3).map(e => e.label)).toEqual(invalidLabels);
+    expect(events[3]!.event).toBe("e".repeat(129));
+    expect(events[4]!.event).toBe("http\n");
     expect(posts).toEqual([[pair("😀".repeat(128), "😀".repeat(128))]]);
   });
 
   it("never learns rejected batches, duplicate IDs, sparse arrays or full queues", async () => {
     const { sdk, posts } = client({ maxQueueSize: 2 });
     const id = "0190b0d0-acbd-7a2d-9bc0-9a36b7e269fb";
-    expect(() => sdk.capture([{ event: "http", label: "Poison" }, { event: "redis", label: "Bad", latency_ms: NaN }])).toThrow(TrafficWarValidationError);
-    expect(() => sdk.capture([{ event: "http", label: "Poison", event_id: id }, { event: "http", label: "Duplicate", event_id: id }])).toThrow(/duplicates/);
+    expect(() => sdk.capture([{ ...validHttpEvent, label: "Poison" }, { ...validEvent, event: "redis", label: "Bad", latency_ms: NaN }])).toThrow(TrafficWarValidationError);
+    expect(() => sdk.capture([{ ...validHttpEvent, label: "Poison", event_id: id }, { ...validHttpEvent, label: "Duplicate", event_id: id }])).toThrow(/duplicates/);
     expect(() => sdk.capture(new Array(1))).toThrow(/sparse/);
-    sdk.capture({ event: "http", label: "Good", event_id: id });
-    expect(() => sdk.capture({ event: "redis", label: "Poison", event_id: id })).toThrow(/duplicates/);
-    sdk.capture({ event: "database", label: "Query" });
-    expect(() => sdk.capture({ event: "s3", label: "Overflow" })).toThrow(/queue/);
+    sdk.capture({ ...validHttpEvent, label: "Good", event_id: id });
+    expect(() => sdk.capture({ ...validEvent, event: "redis", label: "Poison", event_id: id })).toThrow(/duplicates/);
+    sdk.capture({ ...validEvent, event: "database", label: "Query" });
+    expect(() => sdk.capture({ ...validEvent, event: "s3", label: "Overflow" })).toThrow(/queue/);
     expect((await sdk.close()).accepted).toBe(2);
     expect(posts).toEqual([[pair("http", "Good"), pair("database", "Query")]]);
   });
@@ -229,7 +244,7 @@ describe("observed capture integration", () => {
       delivered += batch.length;
       return response({ status: "ok", accepted: batch.length, ingest_id: "lifecycle" });
     } });
-    sdk.capture({ event: "http", label: "Home" });
+    sdk.capture({ ...validHttpEvent, label: "Home" });
     let finished = false;
     const flushing = sdk.flush().then(result => { finished = true; return result; });
     await started.promise;
@@ -240,11 +255,11 @@ describe("observed capture integration", () => {
     expect(delivered).toBe(1);
     expect(finished).toBe(false);
     expect(posts).toBe(1);
-    expect(() => sdk.capture({ event: "http", label: "Too late" })).toThrow(/closing/);
+    expect(() => sdk.capture({ ...validHttpEvent, label: "Too late" })).toThrow(/closing/);
     gate.resolve(response({ status: "ok", added: 1 }));
     await Promise.all([flushing, closing, ...joins]);
     expect(posts).toBe(1);
-    expect(() => sdk.capture({ event: "http" })).toThrow(/closed/);
+    expect(() => sdk.capture({ ...validHttpEvent })).toThrow(/closed/);
   });
 
   it.each(["throw", "reject"])("safely handles %s from onError and retains HTTP failures", async mode => {
@@ -263,7 +278,7 @@ describe("observed capture integration", () => {
       const batch = JSON.parse(Buffer.from(init.body as Uint8Array).toString());
       return response({ status: "ok", accepted: batch.length, ingest_id: "safe-error" });
     } });
-    sdk.capture({ event: "http", label: "Home" });
+    sdk.capture({ ...validHttpEvent, label: "Home" });
     expect((await sdk.flush()).accepted).toBe(1);
     expect(onError).toHaveBeenCalledTimes(1);
     for (let i = 0; i < 20; i++) await sdk.flush();
@@ -289,28 +304,28 @@ describe("observed capture integration", () => {
       const batch = JSON.parse(Buffer.from(init.body as Uint8Array).toString());
       return response({ status: "ok", accepted: batch.length, ingest_id: "retry" });
     } });
-    sdk.capture({ event: "http", label: "Home" });
+    sdk.capture({ ...validHttpEvent, label: "Home" });
     await sdk.flush();
     expect(calls).toBe(2);
     expect(onError).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(1000);
     expect(calls).toBe(3);
-    sdk.capture({ event: "http", label: "Home" });
+    sdk.capture({ ...validHttpEvent, label: "Home" });
     await sdk.close();
     expect(calls).toBe(3);
   });
 
   it("keeps sent memory after server deletion but a fresh client registers again", async () => {
     const first = client();
-    first.sdk.capture({ event: "http", label: "Home" });
+    first.sdk.capture({ ...validHttpEvent, label: "Home" });
     await first.sdk.flush();
     first.posts.length = 0; // Model clearing server-side catalog state.
-    first.sdk.capture({ event: "http", label: "Home" });
+    first.sdk.capture({ ...validHttpEvent, label: "Home" });
     await first.sdk.close();
     expect(first.posts).toEqual([]);
     const fresh = client();
     expect(fresh.posts).toEqual([]);
-    fresh.sdk.capture({ event: "http", label: "Home" });
+    fresh.sdk.capture({ ...validHttpEvent, label: "Home" });
     await fresh.sdk.close();
     expect(fresh.posts).toEqual([[pair("http", "Home")]]);
   });
@@ -323,7 +338,7 @@ describe("observed capture integration", () => {
       const batch = JSON.parse(Buffer.from(init.body as Uint8Array).toString());
       return response({ status: "ok", accepted: batch.length, ingest_id: "recovered" });
     } });
-    sdk.capture({ event: "http", label: "Home" });
+    sdk.capture({ ...validHttpEvent, label: "Home" });
     await expect(sdk.close()).rejects.toThrow("event unavailable");
     expect(onError).toHaveBeenCalledTimes(1);
     failEvent = false;

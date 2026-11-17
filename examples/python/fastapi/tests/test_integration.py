@@ -76,7 +76,17 @@ async def running_example() -> AsyncIterator[
                 yield app_client, events, trafficwar
 
         # The lifespan must not close the caller-injected SDK.
-        await trafficwar.capture({"event": "ownership.probe"})
+        await trafficwar.capture(
+            {
+                "event": "ownership.probe",
+                "label": "Ownership probe",
+                "source": "backend-test",
+                "operation_type": "test.probe",
+                "span_kind": "internal",
+                "timestamp": "2026-08-21T12:00:00Z",
+                "latency_ms": 0,
+            }
+        )
         result = await trafficwar.flush()
         assert result.accepted == 1
         assert events[-1]["event"] == "ownership.probe"
